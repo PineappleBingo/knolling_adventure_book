@@ -27,7 +27,7 @@ class AgentOmega:
         self.delta = AgentDelta()
         self.echo = AgentEcho()
         
-    def start_job(self, theme):
+    async def start_job(self, theme, progress_callback=None):
         """
         Starts the book generation process for a given theme.
         """
@@ -38,12 +38,19 @@ class AgentOmega:
         self.golf.start_job(run_id, theme)
         
         try:
+            if progress_callback:
+                await progress_callback(f"⚙️ Phase: Agent Bravo\n📊 Progress: 0/4\n📝 Status: Generating prompts...")
+
             # 2. Generate Prompts
             logger.info("Agent Bravo: Generating prompts...")
-            # For this MVP, we'll generate a small set of prompts
-            # In production, this would generate all 50 pages
             prompts = []
             
+            # Page 0: Cover
+            prompts.append({
+                "type": "cover",
+                "prompt": self.bravo.generate_cover(theme)
+            })
+
             # Page 1: Mission Briefing
             prompts.append({
                 "type": "mission",
@@ -62,9 +69,14 @@ class AgentOmega:
             })
             
             generated_images = []
+            preview_images = {} # Store paths by type for preview
             
             # 3. Generation Loop
+            total_steps = len(prompts)
             for i, p in enumerate(prompts):
+                if progress_callback:
+                    await progress_callback(f"⚙️ Phase: Agent Charlie & Delta\n📊 Progress: {i}/{total_steps}\n📝 Status: Generating {p['type']} image...")
+
                 logger.info(f"Processing Image {i+1}/{len(prompts)} ({p['type']})...")
                 
                 # Generate
@@ -78,17 +90,21 @@ class AgentOmega:
                     if not passed:
                         logger.warning(f"Image {i+1} failed QA. Retrying ({retries+1}/3)...")
                         retries += 1
-                        # Retry generation (in real logic, maybe tweak prompt?)
+                        # Retry generation
                         image_path = self.charlie.generate_image(p['prompt'])
                 
                 if passed:
                     generated_images.append(image_path)
+                    preview_images[p['type']] = image_path
                     self.golf.update_progress(run_id, f"Image {i+1} Generated", len(generated_images))
                 else:
                     logger.error(f"Image {i+1} failed QA after retries. Skipping.")
             
             # 4. Assembly
             if generated_images:
+                if progress_callback:
+                    await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_images)}/{total_steps}\n📝 Status: Assembling PDF...")
+
                 logger.info("Agent Echo: Assembling PDF...")
                 pdf_path = self.echo.assemble_pdf(generated_images)
                 
@@ -97,11 +113,21 @@ class AgentOmega:
                 drive_link = f"file://{pdf_path}" 
                 self.golf.finish_job(run_id, drive_link)
                 logger.info(f"Job {run_id} completed successfully.")
+                
+                return {
+                    "status": "SUCCESS",
+                    "run_id": run_id,
+                    "pdf_path": pdf_path,
+                    "drive_link": drive_link,
+                    "previews": preview_images
+                }
             else:
-                logger.error("No images generated. Job failed.")
-                self.golf.update_progress(run_id, "FAILED: No images")
+                error_msg = "No images generated. Job failed."
+                logger.error(error_msg)
+                self.golf.log_error(run_id, error_msg)
+                raise Exception(error_msg)
                 
         except Exception as e:
             logger.error(f"Job {run_id} failed: {e}")
-            self.golf.update_progress(run_id, f"FAILED: {e}")
+            self.golf.log_error(run_id, str(e))
             raise e

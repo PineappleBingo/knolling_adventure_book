@@ -41,25 +41,81 @@ class AgentFoxtrot:
             return
 
         theme = " ".join(context.args)
-        await update.message.reply_text(f"🚀 Copy that! Initiating launch sequence for theme: '{theme}'...")
+        from src import config
         
-        # Handoff to Agent Omega (Orchestrator)
-        # Note: In a real async app, we might want to run this in a separate thread or task
-        # so we don't block the bot. For now, we'll assume start_job is synchronous or fast enough,
-        # or we'll need to make start_job async.
+        # Initial Dashboard Message
+        dashboard_msg = await update.message.reply_text(
+            f"🚀 <b>Initiating Launch Sequence</b>\n"
+            f"Theme: {theme}\n"
+            f"⚙️ Phase: Initialization\n"
+            f"📊 Progress: 0%\n"
+            f"📝 Status: Starting engines...\n\n"
+            f"📊 <a href='{config.MISSION_CONTROL_SHEET_URL}'>Mission Control</a>",
+            parse_mode='HTML'
+        )
+        
+        # Progress Callback
+        async def progress_callback(msg_text):
+            try:
+                # Append Mission Control link to every update
+                full_msg = f"{msg_text}\n\n📊 <a href='{config.MISSION_CONTROL_SHEET_URL}'>Mission Control</a>"
+                # Only edit if content changed (Telegram API limitation/optimization)
+                if full_msg != dashboard_msg.text:
+                    await dashboard_msg.edit_text(full_msg, parse_mode='HTML')
+            except Exception as e:
+                logger.warning(f"Failed to update dashboard: {e}")
+
         try:
-            # We pass the update object so Omega can send messages back if needed
-            # But for now, Omega just takes the theme.
-            # Ideally, Omega should return a run_id or status.
-            self.orchestrator.start_job(theme)
-            from src import config
-            await update.message.reply_text(
-                f"✅ Job started for '{theme}'.\n"
-                f"📊 Track progress in Mission Control: {config.MISSION_CONTROL_SHEET_URL}"
+            # Start Job (Async)
+            result = await self.orchestrator.start_job(theme, progress_callback)
+            
+            # Final Status Update
+            await dashboard_msg.edit_text(
+                f"✅ <b>Mission Accomplished!</b>\n"
+                f"Theme: {theme}\n"
+                f"⚙️ Phase: Complete\n"
+                f"📊 Progress: 100%\n"
+                f"📝 Status: Ready for download.\n\n"
+                f"📊 <a href='{config.MISSION_CONTROL_SHEET_URL}'>Mission Control</a>",
+                parse_mode='HTML'
             )
+            
+            # Send Visual Proof (Media Group)
+            from telegram import InputMediaPhoto
+            media_group = []
+            
+            # Helper to safely open files
+            def get_photo(path, caption):
+                if path and os.path.exists(path):
+                    return InputMediaPhoto(open(path, 'rb'), caption=caption)
+                return None
+
+            if 'cover' in result['previews']:
+                p = get_photo(result['previews']['cover'], "Cover Page")
+                if p: media_group.append(p)
+            
+            if 'knolling' in result['previews']:
+                p = get_photo(result['previews']['knolling'], "Knolling Page")
+                if p: media_group.append(p)
+                
+            if 'action' in result['previews']:
+                p = get_photo(result['previews']['action'], "Action Page")
+                if p: media_group.append(p)
+            
+            if media_group:
+                await update.message.reply_media_group(media_group)
+            
+            # Send PDF Link
+            await update.message.reply_text(f"📕 <b>Download PDF:</b> {result['drive_link']}", parse_mode='HTML')
+            
         except Exception as e:
             logger.error(f"Failed to start job: {e}")
-            await update.message.reply_text(f"❌ Error starting job: {e}")
+            await dashboard_msg.edit_text(
+                f"❌ <b>Mission Failed</b>\n"
+                f"Error: {e}\n\n"
+                f"📊 <a href='{config.MISSION_CONTROL_SHEET_URL}'>Mission Control</a>",
+                parse_mode='HTML'
+            )
 
     def start(self):
         """

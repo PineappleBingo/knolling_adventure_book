@@ -90,3 +90,23 @@ class AgentGolf:
                 logger.warning(f"Job {run_id} not found.")
         except Exception as e:
             logger.error(f"Failed to finish job: {e}")
+    def log_error(self, run_id, error_msg):
+        """
+        Logs a critical failure for the job.
+        Updates Status to '❌ FAILED' and Drive Link to the error message.
+        """
+        if not self.sheet:
+            return
+
+        try:
+            cell = self.sheet.find(run_id)
+            if cell:
+                # Update Status (Column 4)
+                self.sheet.update_cell(cell.row, 4, "❌ FAILED")
+                # Update Drive Link (Column 6) with Error Message
+                self.sheet.update_cell(cell.row, 6, f"Error: {error_msg}")
+                logger.error(f"Job {run_id} logged as FAILED: {error_msg}")
+            else:
+                logger.warning(f"Job {run_id} not found for error logging.")
+        except Exception as e:
+            logger.error(f"Failed to log error: {e}")
