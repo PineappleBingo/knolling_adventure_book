@@ -1,0 +1,7 @@
+python-telegram-bot
+google-generativeai
+pillow
+reportlab
+pydrive2
+gspread
+oauth2client
