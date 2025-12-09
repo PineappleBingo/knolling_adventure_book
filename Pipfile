@@ -11,7 +11,7 @@ pydrive2 = "*"
 gspread = "*"
 oauth2client = "*"
 python-dotenv = "*"
-google-generativeai = "*"
+google-generativeai = ">=0.8.3"
 
 [dev-packages]
 
