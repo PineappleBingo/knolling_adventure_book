@@ -11,6 +11,9 @@ load_dotenv()
 # Deployment Tier: 'FREE' or 'PAID'
 DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
+# Mission Control Sheet URL
+MISSION_CONTROL_SHEET_URL = "https://docs.google.com/spreadsheets/d/1uNFeH89l96fbuB6olSHAWip-w_et-iqLDJLfBfuMvCo/edit?usp=sharing"
+
 # Rate Limiting Delays (in seconds)
 if DEPLOYMENT_TIER == "PAID":
     QA_DELAY = 0.5
