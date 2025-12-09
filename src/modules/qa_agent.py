@@ -21,7 +21,8 @@ class AgentDelta:
             logger.error("GOOGLE_API_KEY not found.")
         else:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-pro')
+            # Using gemini-2.0-flash as it is available and capable
+            self.model = genai.GenerativeModel('gemini-2.0-flash')
 
     def quality_check(self, image_path):
         """
