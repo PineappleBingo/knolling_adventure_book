@@ -5,13 +5,13 @@ name = "pypi"
 
 [packages]
 python-telegram-bot = "*"
-google-generativeai = "*"
 pillow = "*"
 reportlab = "*"
 pydrive2 = "*"
 gspread = "*"
 oauth2client = "*"
 python-dotenv = "*"
+google-generativeai = "*"
 
 [dev-packages]
 
