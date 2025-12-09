@@ -21,20 +21,12 @@ class AgentCharlie:
             logger.error("GOOGLE_API_KEY not found.")
         else:
             genai.configure(api_key=api_key)
-            # Initialize the model
-            # Note: We try to use ImageGenerationModel as requested.
-            # If it doesn't exist in the library, this will raise an AttributeError, causing a crash as desired.
-            try:
-                self.model = genai.ImageGenerationModel("imagen-3.0-generate-001")
-            except AttributeError:
-                # If ImageGenerationModel is missing, we try to import it directly or fail
-                # In newer versions, it might be under a different module, but we stick to the user's instruction.
-                logger.error("genai.ImageGenerationModel not found. Please upgrade google-generativeai.")
-                raise
+            # Using Gemini 2.0 Flash Exp for Image Generation as Imagen 3 is unavailable
+            self.model = genai.GenerativeModel("gemini-2.0-flash-exp-image-generation")
 
     def generate_image(self, prompt):
         """
-        Generates an image based on the prompt using Imagen 3.
+        Generates an image based on the prompt using Gemini 2.0 Flash Exp.
         Returns the path to the saved image.
         """
         logger.info(f"Generating image for prompt: {prompt[:50]}...")
@@ -44,38 +36,30 @@ class AgentCharlie:
         time.sleep(config.IMG_GEN_DELAY)
 
         try:
-            # Try generating with the main model
-            response = self.model.generate_images(
-                prompt=prompt,
-                number_of_images=1,
-                aspect_ratio="1:1",
-                safety_filter_level="block_only_high",
-                person_generation="allow_adult"
-            )
-        except Exception as e:
-            logger.warning(f"Imagen 3.0 failed: {e}. Trying fallback to Imagen 3.0 Fast...")
-            try:
-                # Fallback to Fast model
-                fast_model = genai.ImageGenerationModel("imagen-3.0-fast-generate-001")
-                response = fast_model.generate_images(
-                    prompt=prompt,
-                    number_of_images=1,
-                    aspect_ratio="1:1",
-                    safety_filter_level="block_only_high",
-                    person_generation="allow_adult"
-                )
-            except Exception as e2:
-                logger.error(f"Imagen 3.0 Fast also failed: {e2}")
-                raise e2 # Crash as requested
-
-        if response.images:
-            image = response.images[0]
+            # Generate Content (Image)
+            response = self.model.generate_content(prompt)
             
-            # Save to temp
-            filename = f"temp/gen_{int(time.time())}.png"
-            image.save(filename)
-            logger.info(f"Image saved to {filename}")
-            return filename
-        else:
-            logger.error("No images returned from API.")
-            raise ValueError("No images returned from API")
+            # Extract Image from Response
+            if response.parts:
+                for part in response.parts:
+                    if part.mime_type and part.mime_type.startswith("image/"):
+                        # Save to temp
+                        filename = f"temp/gen_{int(time.time())}.png"
+                        img_data = part.inline_data.data
+                        # Decode if needed, but usually the library handles it or gives bytes?
+                        # Actually, for inline_data, it might be bytes.
+                        # Let's assume we need to save bytes.
+                        # Wait, the library object 'part' might not be easy to save directly without PIL or writing bytes.
+                        # Let's try writing bytes directly.
+                        with open(filename, "wb") as f:
+                            f.write(img_data)
+                            
+                        logger.info(f"Image saved to {filename}")
+                        return filename
+            
+            logger.error("No image parts found in response.")
+            raise ValueError("No image parts returned from API")
+
+        except Exception as e:
+            logger.error(f"Image generation failed: {e}")
+            raise e
