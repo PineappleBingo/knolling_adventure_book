@@ -43,29 +43,22 @@ class AgentOmega:
 
             # 2. Generate Prompts
             logger.info("Agent Bravo: Generating prompts...")
-            prompts = []
             
-            # Page 0: Cover
-            prompts.append({
+            # Get Interior Prompts & Context
+            prompt_data = self.bravo.generate_prompts(theme)
+            prompts = prompt_data['prompts']
+            
+            # Generate Cover using the SAME context
+            cover_prompt = self.bravo.generate_cover(
+                theme, 
+                prompt_data['main_character'], 
+                prompt_data['gear_objects']
+            )
+            
+            # Insert Cover at the beginning
+            prompts.insert(0, {
                 "type": "cover",
-                "prompt": self.bravo.generate_cover(theme)
-            })
-
-            # Page 1: Mission Briefing
-            prompts.append({
-                "type": "mission",
-                "prompt": self.bravo.generate_mission_briefing(theme)
-            })
-            
-            # Demo: Just 1 Spread (Page 4 & 5)
-            items = ["Helmet", "Hose", "Ladder", "Axe", "Boots"] # Placeholder items
-            prompts.append({
-                "type": "knolling",
-                "prompt": self.bravo.generate_knolling_prompt(theme, items)
-            })
-            prompts.append({
-                "type": "action",
-                "prompt": self.bravo.generate_action_prompt(theme, "fighting fire", items, "burning building")
+                "prompt": cover_prompt
             })
             
             generated_images = []

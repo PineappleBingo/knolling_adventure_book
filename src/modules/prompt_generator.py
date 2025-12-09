@@ -100,6 +100,45 @@ class AgentBravo:
             f"A mini {main_character} is pointing at the previews. Blurb text below. Bottom right corner is empty background space. "
             f"Style: Flat vector illustration, vibrant colors, thick clean outlines, high energy"
         )
-        # Cover has specific style requirements different from interior (color, etc)
         # So we don't use _inject_style here, but append specific cover style
         return f"{prompt}, 300 dpi"
+
+    def generate_prompts(self, theme):
+        """
+        Generates all interior prompts and returns context for consistency.
+        Returns:
+            dict: {
+                "prompts": [list of prompt dicts],
+                "main_character": str,
+                "gear_objects": str
+            }
+        """
+        # Define Context (Centralized Source of Truth)
+        # In a real app, these might be randomized or more detailed
+        items = ["Helmet", "Hose", "Ladder", "Axe", "Boots"] 
+        main_character = f"Heroic {theme}"
+        gear_objects = ", ".join(items)
+        
+        prompts = []
+        
+        # Page 1: Mission Briefing
+        prompts.append({
+            "type": "mission",
+            "prompt": self.generate_mission_briefing(theme)
+        })
+        
+        # Demo: Just 1 Spread (Page 4 & 5)
+        prompts.append({
+            "type": "knolling",
+            "prompt": self.generate_knolling_prompt(theme, items)
+        })
+        prompts.append({
+            "type": "action",
+            "prompt": self.generate_action_prompt(theme, "fighting fire", items, "burning building")
+        })
+        
+        return {
+            "prompts": prompts,
+            "main_character": main_character,
+            "gear_objects": gear_objects
+        }
