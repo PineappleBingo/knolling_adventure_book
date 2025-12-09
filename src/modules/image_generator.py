@@ -21,8 +21,9 @@ class AgentCharlie:
             logger.error("GOOGLE_API_KEY not found.")
         else:
             genai.configure(api_key=api_key)
-            # Using Gemini 2.0 Flash Exp for Image Generation as Imagen 3 is unavailable
-            self.model = genai.GenerativeModel("gemini-2.0-flash-exp-image-generation")
+            # Dynamic Model Selection based on Tier (Free vs Paid)
+            logger.info(f"Using Image Model: {config.IMAGE_MODEL_NAME}")
+            self.model = genai.GenerativeModel(config.IMAGE_MODEL_NAME)
 
     def generate_image(self, prompt):
         """
