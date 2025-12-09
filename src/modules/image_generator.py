@@ -20,10 +20,11 @@ class AgentCharlie:
         if not api_key:
             logger.error("GOOGLE_API_KEY not found.")
         else:
-            genai.configure(api_key=api_key)
+            # genai.configure(api_key=api_key)
             # Assuming 'imagen-3.0-generate-001' or similar model name
             # You might need to adjust the model name based on availability
-            self.model = genai.ImageGenerationModel("imagen-3.0-generate-001")
+            # self.model = genai.ImageGenerationModel("imagen-3.0-generate-001")
+            pass
 
     def generate_image(self, prompt):
         """
@@ -38,27 +39,24 @@ class AgentCharlie:
             time.sleep(config.IMG_GEN_DELAY)
 
             # Generate
-            # Note: The exact API call might vary slightly depending on the lib version
-            # This is a standard pattern for the new genai lib
-            response = self.model.generate_images(
-                prompt=prompt,
-                number_of_images=1,
-                aspect_ratio="1:1", # Square as per Bible
-                safety_filter_level="block_only_high",
-                person_generation="allow_adult"
-            )
+            # Note: google-generativeai v0.8.5 does not support ImageGenerationModel yet.
+            # We will use a placeholder for now to allow the pipeline to run.
+            logger.warning("Imagen 3 API not available in this library version. Using placeholder.")
             
-            if response.images:
-                image = response.images[0]
-                
-                # Save to temp
-                filename = f"temp/gen_{int(time.time())}.png"
-                image.save(filename)
-                logger.info(f"Image saved to {filename}")
-                return filename
-            else:
-                logger.error("No images returned from API.")
-                return None
+            # Create a placeholder image
+            filename = f"temp/gen_{int(time.time())}.png"
+            img = Image.new('RGB', (1024, 1024), color = (255, 255, 255))
+            # Draw some text
+            from PIL import ImageDraw
+            d = ImageDraw.Draw(img)
+            d.text((10,10), f"Placeholder: {prompt[:20]}", fill=(0,0,0))
+            img.save(filename)
+            
+            logger.info(f"Image saved to {filename}")
+            return filename
+
+            # response = self.model.generate_images(...)
+            # ... (commented out real API code)
 
         except Exception as e:
             logger.error(f"Image generation failed: {e}")

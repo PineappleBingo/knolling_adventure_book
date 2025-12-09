@@ -4,6 +4,12 @@ Initializes Agent Omega (Orchestrator) and Agent Foxtrot (UI).
 """
 
 import logging
+import sys
+import os
+
+# Add project root to sys.path to allow 'from src...' imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.modules.orchestrator import AgentOmega
 from src.modules.bot_interface import AgentFoxtrot
 
