@@ -1,0 +1,29 @@
+"""
+Configuration settings for Knolling Adventures.
+Handles dynamic rate limiting based on deployment tier.
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Deployment Tier: 'FREE' or 'PAID'
+DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
+
+# Rate Limiting Delays (in seconds)
+if DEPLOYMENT_TIER == "PAID":
+    QA_DELAY = 0.5
+    IMG_GEN_DELAY = 0.5
+    PROMPT_GEN_DELAY = 0.5
+else:
+    # FREE Tier Limits
+    QA_DELAY = 35        # Gemini 1.5 Pro: 2 RPM limit -> 30s+ buffer
+    IMG_GEN_DELAY = 20   # Safe buffer for image generation
+    PROMPT_GEN_DELAY = 5 # Buffer for prompt generation
+
+def get_status_message():
+    if DEPLOYMENT_TIER == "PAID":
+        return "🚀 Running in PAID mode - Max Speed"
+    else:
+        return "🐢 Running in FREE mode - Safe Limits Active"

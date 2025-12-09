@@ -9,7 +9,6 @@
 ---
 
 ## 0. THE AGENT MANIFEST (Engineering Architecture)
-*Use this manifest to instruct the AI IDE on how to build the Python application. Each Agent represents a specialized module with Senior-Level expertise.*
 
 ### 0.1 TECHNICAL SPECIFICATIONS (The Stack)
 * **Core Python Libs:**
@@ -19,7 +18,10 @@
     * `reportlab` (PDF assembly & high-res canvas control)
     * `pydrive2` (Google Drive uploads)
     * `gspread` (Google Sheets tracking)
-    * `oauth2client` (Auth for Drive/Sheets)
+    * `python-dotenv` (Environment variable management) <-- NEW!
+* **Secrets & Credentials (Security):**
+    * `credentials.json` (Google Cloud Service Account Key)
+    * `.env` file (Stores `TELEGRAM_TOKEN` and `GOOGLE_API_KEY`) <-- NEW!
 * **Project Structure:**
     * `/src/main.py` - Entry point (Initializes Omega & Foxtrot).
     * `/src/modules/` - Modular logic for each agent.
@@ -44,8 +46,9 @@
 * **Mission:** Build the rock-solid foundation.
 * **Tasks:**
     * Initialize Python environment.
-    * Manage secure credential handling (`credentials.json`) for Google Service Accounts.
-    * Create `requirements.txt` with conflict-free versions of libraries listed above.
+    * **Security:** Create a `.env` file pattern to store `TELEGRAM_TOKEN` and `GOOGLE_API_KEY` so they are never committed to code.
+    * Manage `credentials.json` logic for Drive/Sheets.
+    * Create `Pipfile` or `requirements.txt` with conflict-free versions.
 
 ### 🎨 Agent Bravo: Executive Creative Director (Prompt Logic)
 * **Mission:** Ensure the "Director" logic (Gemini 1.5 Flash) strictly adheres to the visual style guidelines.
@@ -86,11 +89,11 @@
 * **Mission:** Build the Telegram Bot Wrapper.
 * **Tasks:**
     * Write `bot_interface.py`.
+    * Load `TELEGRAM_TOKEN` from `.env`.
     * Listen for command: `/generate [Theme]`.
     * **Handoff:** Pass request to Agent Omega.
     * **Feedback:** Report status updates ("Generating... 20/50").
     * **Approval:** Present the final PDF button for human sign-off before upload.
-
 ---
 
 ## 1. Core Design Rules (The Constants)

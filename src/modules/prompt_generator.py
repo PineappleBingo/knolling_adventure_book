@@ -4,7 +4,9 @@ Mission: Ensure the "Director" logic strictly adheres to the visual style guidel
 """
 
 import logging
+import time
 import google.generativeai as genai
+from src import config
 
 logger = logging.getLogger("AgentBravo")
 
@@ -13,6 +15,11 @@ class AgentBravo:
         logger.info("Agent Bravo initialized.")
         # Note: API Key should be set in environment variables or configured externally
         # genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+    def _rate_limit(self):
+        """Applies rate limiting delay."""
+        logger.info(f"Sleeping for {config.PROMPT_GEN_DELAY}s (Rate Limit)...")
+        time.sleep(config.PROMPT_GEN_DELAY)
 
     def _inject_style(self, base_prompt):
         """
@@ -30,6 +37,7 @@ class AgentBravo:
         """
         Generates the prompt for Page 1: Mission Briefing.
         """
+        self._rate_limit()
         prompt = (
             f"title page design, a large bold outline of a magnifying glass in the center (empty inside), "
             f"central area is clean white space, surrounded by a border frame composed of small cute {theme} icons "
@@ -41,6 +49,7 @@ class AgentBravo:
         """
         Generates the prompt for the Left Page (Knolling).
         """
+        self._rate_limit()
         items_str = ", ".join(items)
         prompt = (
             f"knolling photography layout, flat lay, {theme} parts/gear, "
@@ -55,6 +64,7 @@ class AgentBravo:
         """
         Generates the prompt for the Right Page (Action).
         """
+        self._rate_limit()
         items_str = ", ".join(items)
         prompt = (
             f"{theme} in an action pose, full body shot, wearing/using {items_str}, "
@@ -67,6 +77,7 @@ class AgentBravo:
         """
         Generates the prompt for Page 50: Certificate.
         """
+        self._rate_limit()
         prompt = (
             f"certificate of completion design, a rectangular border frame composed of neat rows of diverse unique {theme} items "
             f"arranged side-by-side, no repeating patterns, organized knolling style border, "
@@ -78,6 +89,7 @@ class AgentBravo:
         """
         Generates the prompt for the Cover Art.
         """
+        self._rate_limit()
         prompt = (
             f"a seamless panoramic book cover design for kids, wide aspect ratio, {theme} theme. "
             f"Right Side (Front): Huge title text 'KNOLLING ADVENTURES' at top, subtitle below. "
