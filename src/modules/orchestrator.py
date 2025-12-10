@@ -64,6 +64,11 @@ class AgentOmega:
             generated_images = []
             preview_images = {} # Store paths by type for preview
             
+            # Limit prompts based on PAGE_COUNT
+            if len(prompts) > config.PAGE_COUNT:
+                logger.info(f"Limiting generation to {config.PAGE_COUNT} pages (PAGE_COUNT).")
+                prompts = prompts[:config.PAGE_COUNT]
+
             # 3. Generation Loop
             total_steps = len(prompts)
             for i, p in enumerate(prompts):

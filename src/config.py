@@ -11,6 +11,12 @@ load_dotenv()
 # Deployment Tier: 'FREE' or 'PAID'
 DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
+# Page Count Configuration (Default: 50)
+try:
+    PAGE_COUNT = int(os.getenv("PAGE_COUNT", "50"))
+except ValueError:
+    PAGE_COUNT = 50
+
 # Image Model Configuration
 if DEPLOYMENT_TIER == "PAID":
     IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
