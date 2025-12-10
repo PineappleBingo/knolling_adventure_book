@@ -13,7 +13,7 @@ DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
 # Image Model Configuration
 if DEPLOYMENT_TIER == "PAID":
-    IMAGE_MODEL_NAME = "imagen-3.0-generate-002"
+    IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
 else:
     # FREE Tier: Use Gemini 2.0 Flash Exp (Image Generation)
     IMAGE_MODEL_NAME = "models/gemini-2.0-flash-exp-image-generation"
