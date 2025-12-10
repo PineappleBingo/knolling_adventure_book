@@ -22,7 +22,7 @@ class AgentCharlie:
         
         logger.info(f"Using Image Model: {config.IMAGE_MODEL_NAME}")
 
-    def generate_image(self, prompt):
+    def generate_image(self, prompt, theme, page_number):
         """
         Generates an image based on the prompt using REST API.
         """
@@ -32,9 +32,12 @@ class AgentCharlie:
         logger.info(f"Sleeping for {config.IMG_GEN_DELAY}s (Rate Limit)...")
         time.sleep(config.IMG_GEN_DELAY)
 
+        # Clean theme for filename
+        safe_theme = "".join(x for x in theme if x.isalnum() or x in " _-").strip().replace(" ", "_")
+        
         try:
             if config.DEPLOYMENT_TIER == "PAID":
-                # PAID Tier: Imagen 3 (:predict endpoint)
+                # PAID Tier: Imagen 4.0 (:predict endpoint)
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.IMAGE_MODEL_NAME}:predict"
                 headers = {
                     'Content-Type': 'application/json',
@@ -60,7 +63,7 @@ class AgentCharlie:
                     b64_data = result['predictions'][0]['bytesBase64Encoded']
                     img_data = base64.b64decode(b64_data)
                     
-                    filename = f"temp/gen_{int(time.time())}.png"
+                    filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
                     with open(filename, "wb") as f:
                         f.write(img_data)
                     logger.info(f"Image saved to {filename}")
@@ -101,7 +104,7 @@ class AgentCharlie:
                                     b64_data = part['inlineData']['data']
                                     img_data = base64.b64decode(b64_data)
                                     
-                                    filename = f"temp/gen_{int(time.time())}.png"
+                                    filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
                                     with open(filename, "wb") as f:
                                         f.write(img_data)
                                     logger.info(f"Image saved to {filename}")

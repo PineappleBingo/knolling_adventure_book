@@ -73,7 +73,15 @@ class AgentOmega:
                 logger.info(f"Processing Image {i+1}/{len(prompts)} ({p['type']})...")
                 
                 # Generate
-                image_path = self.charlie.generate_image(p['prompt'])
+                # Pass theme and page number (i+1) for naming
+                # For cover (i=0), it will be Page1, but strictly it's Cover.
+                # Let's handle naming convention:
+                # If type is cover, page_number could be "Cover" or 0
+                page_num_str = str(i+1).zfill(2)
+                if p['type'] == 'cover':
+                    page_num_str = "Cover"
+                
+                image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
                 
                 # QA Check (Retry Loop)
                 passed = False
@@ -84,7 +92,7 @@ class AgentOmega:
                         logger.warning(f"Image {i+1} failed QA. Retrying ({retries+1}/3)...")
                         retries += 1
                         # Retry generation
-                        image_path = self.charlie.generate_image(p['prompt'])
+                        image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
                 
                 if passed:
                     generated_images.append(image_path)
