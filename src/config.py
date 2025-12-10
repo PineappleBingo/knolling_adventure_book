@@ -18,6 +18,9 @@ else:
     # FREE Tier: Use Gemini 2.0 Flash Exp (Image Generation)
     IMAGE_MODEL_NAME = "models/gemini-2.0-flash-exp-image-generation"
 
+# QA Model Configuration (Same for both tiers)
+QA_MODEL_NAME = "models/gemini-2.5-pro"
+
 # Mission Control Sheet URL
 MISSION_CONTROL_SHEET_URL = "https://docs.google.com/spreadsheets/d/1uNFeH89l96fbuB6olSHAWip-w_et-iqLDJLfBfuMvCo/edit?usp=sharing"
 

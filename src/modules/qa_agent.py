@@ -21,8 +21,8 @@ class AgentDelta:
             logger.error("GOOGLE_API_KEY not found.")
         else:
             genai.configure(api_key=api_key)
-            # Using gemini-1.5-pro for strict visual reasoning as requested
-            self.model = genai.GenerativeModel('gemini-1.5-pro')
+            # Using Gemini 2.5 Pro for strict visual reasoning
+            self.model = genai.GenerativeModel(config.QA_MODEL_NAME)
 
     def quality_check(self, image_path):
         """
