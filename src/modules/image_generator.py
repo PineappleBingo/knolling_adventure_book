@@ -6,8 +6,9 @@ Mission: Manage the "Artist" loop (Imagen 3 API).
 import logging
 import time
 import os
-import google.generativeai as genai
-from PIL import Image
+import requests
+import json
+import base64
 from src import config
 
 logger = logging.getLogger("AgentCharlie")
@@ -15,30 +16,15 @@ logger = logging.getLogger("AgentCharlie")
 class AgentCharlie:
     def __init__(self):
         logger.info("Agent Charlie initialized.")
-        # Configure API
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
+        self.api_key = os.getenv("GOOGLE_API_KEY")
+        if not self.api_key:
             logger.error("GOOGLE_API_KEY not found.")
-        else:
-            genai.configure(api_key=api_key)
-            logger.info(f"Using Image Model: {config.IMAGE_MODEL_NAME}")
-            
-            if config.DEPLOYMENT_TIER == "PAID":
-                # PAID Tier: Imagen 3
-                try:
-                    from google.generativeai import ImageGenerationModel
-                    self.model = ImageGenerationModel(config.IMAGE_MODEL_NAME)
-                except ImportError:
-                    logger.error("ImageGenerationModel not found. Please upgrade google-generativeai.")
-                    raise
-            else:
-                # FREE Tier: Gemini 2.0 Flash Exp
-                self.model = genai.GenerativeModel(config.IMAGE_MODEL_NAME)
+        
+        logger.info(f"Using Image Model: {config.IMAGE_MODEL_NAME}")
 
     def generate_image(self, prompt):
         """
-        Generates an image based on the prompt.
-        Uses generate_images for PAID tier and generate_content for FREE tier.
+        Generates an image based on the prompt using REST API.
         """
         logger.info(f"Generating image for prompt: {prompt[:50]}...")
         
@@ -48,35 +34,83 @@ class AgentCharlie:
 
         try:
             if config.DEPLOYMENT_TIER == "PAID":
-                # PAID Tier: generate_images
-                response = self.model.generate_images(
-                    prompt=prompt,
-                    number_of_images=1,
-                    aspect_ratio="1:1",
-                    safety_filter_level="block_only_high",
-                    person_generation="allow_adult"
-                )
-                if response.images:
-                    image = response.images[0]
+                # PAID Tier: Imagen 3 (:predict endpoint)
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.IMAGE_MODEL_NAME}:predict"
+                headers = {
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': self.api_key
+                }
+                payload = {
+                    "instances": [
+                        { "prompt": prompt }
+                    ],
+                    "parameters": {
+                        "sampleCount": 1,
+                        "aspectRatio": "1:1"
+                    }
+                }
+                
+                response = requests.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                
+                # Parse Imagen Response
+                # Expected: {'predictions': [{'bytesBase64Encoded': '...', 'mimeType': 'image/png'}]}
+                if 'predictions' in result and len(result['predictions']) > 0:
+                    b64_data = result['predictions'][0]['bytesBase64Encoded']
+                    img_data = base64.b64decode(b64_data)
+                    
                     filename = f"temp/gen_{int(time.time())}.png"
-                    image.save(filename)
+                    with open(filename, "wb") as f:
+                        f.write(img_data)
                     logger.info(f"Image saved to {filename}")
                     return filename
                 else:
-                    raise ValueError("No images returned from Imagen 3 API")
+                    raise ValueError(f"Invalid response from Imagen API: {result}")
+
             else:
-                # FREE Tier: generate_content
-                response = self.model.generate_content(prompt)
-                if response.parts:
-                    for part in response.parts:
-                        if part.mime_type and part.mime_type.startswith("image/"):
-                            filename = f"temp/gen_{int(time.time())}.png"
-                            with open(filename, "wb") as f:
-                                f.write(part.inline_data.data)
-                            logger.info(f"Image saved to {filename}")
-                            return filename
-                raise ValueError("No image parts returned from Gemini Flash API")
+                # FREE Tier: Gemini 2.0 Flash Exp (:generateContent endpoint)
+                # Handle 'models/' prefix if present in config
+                model_id = config.IMAGE_MODEL_NAME
+                if model_id.startswith("models/"):
+                    url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent"
+                else:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+
+                headers = {
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': self.api_key
+                }
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+                
+                response = requests.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                result = response.json()
+                
+                # Parse Gemini Response
+                # Look for inline data in candidates
+                if 'candidates' in result and result['candidates']:
+                    for candidate in result['candidates']:
+                        if 'content' in candidate and 'parts' in candidate['content']:
+                            for part in candidate['content']['parts']:
+                                if 'inlineData' in part:
+                                    b64_data = part['inlineData']['data']
+                                    img_data = base64.b64decode(b64_data)
+                                    
+                                    filename = f"temp/gen_{int(time.time())}.png"
+                                    with open(filename, "wb") as f:
+                                        f.write(img_data)
+                                    logger.info(f"Image saved to {filename}")
+                                    return filename
+                            
+                raise ValueError(f"No image found in Gemini Flash response: {result}")
 
         except Exception as e:
             logger.error(f"Image generation failed: {e}")
+            if 'response' in locals() and hasattr(response, 'text'):
+                logger.error(f"API Response: {response.text}")
             raise e
