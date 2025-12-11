@@ -91,7 +91,7 @@ class AgentBravo:
         else:
             logger.warning("Blueprint file not found!")
             
-        # 2. Load Wireframe Image
+        # 2. Load Wireframe Image (Geometry)
         wireframe_path = "assets/ref_cover_layout_wireframe_kdp.png"
         wireframe_img = None
         if os.path.exists(wireframe_path):
@@ -99,7 +99,15 @@ class AgentBravo:
         else:
             logger.warning("Wireframe image not found!")
 
-        # 3. Construct Meta-Prompt for Gemini
+        # 3. Load Structure Example Image (Context)
+        structure_path = "assets/ref_cover_structure_example.png"
+        structure_img = None
+        if os.path.exists(structure_path):
+            structure_img = Image.open(structure_path)
+        else:
+            logger.warning("Structure example image not found!")
+
+        # 4. Construct Meta-Prompt for Gemini
         dna_cover = self.style_library.get("dna_cover", "")
         
         meta_prompt = (
@@ -110,13 +118,16 @@ class AgentBravo:
             f"STYLE DNA: {dna_cover}\n\n"
             "REFERENCE DOCUMENTS:\n"
             f"1. BLUEPRINT TEXT:\n{blueprint_text}\n\n"
-            "2. WIREFRAME IMAGE (Attached): This defines the strict spatial layout. "
+            "2. WIREFRAME IMAGE (First Image): This defines the STRICT GEOMETRY (X/Y Coordinates). "
             "Red=Title, Yellow=Marketing, Green=Stickers, Blue=Mini-Char, White=Main-Char, Black=Logo Zone.\n\n"
+            "3. STRUCTURE EXAMPLE (Second Image): This defines the CONTEXT (Layering & Density). "
+            "Observe how the Character overlaps the background. Observe how Stickers float in negative space.\n\n"
             "INSTRUCTION:\n"
             "Write a single, seamless panoramic image prompt. "
-            "Describe the visual elements exactly as defined in the Blueprint and Wireframe. "
+            "1. GEOMETRY: Follow the Wireframe for placement.\n"
+            "2. CONTEXT: Follow the Structure Example for layering/density.\n"
+            "3. STYLE: Follow the Style DNA for rendering.\n"
             "Explicitly instruct the generator to leave the 'Black Zone' (Zone 8) empty or reserved for the 'assets/logo.png' overlay. "
-            "Combine the Blueprint structure with the Style DNA. "
             "Output ONLY the raw prompt string, no markdown."
         )
         
@@ -124,6 +135,8 @@ class AgentBravo:
             inputs = [meta_prompt]
             if wireframe_img:
                 inputs.append(wireframe_img)
+            if structure_img:
+                inputs.append(structure_img)
                 
             response = self.vision_model.generate_content(inputs)
             final_prompt = response.text.strip()
