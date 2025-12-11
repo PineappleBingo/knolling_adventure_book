@@ -5,7 +5,10 @@ Mission: Ensure the "Director" logic strictly adheres to the visual style guidel
 
 import logging
 import time
+import glob
+import os
 import google.generativeai as genai
+from PIL import Image
 from src import config
 
 logger = logging.getLogger("AgentBravo")
@@ -13,128 +16,180 @@ logger = logging.getLogger("AgentBravo")
 class AgentBravo:
     def __init__(self):
         logger.info("Agent Bravo initialized.")
-        # Note: API Key should be set in environment variables or configured externally
-        # genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        # Initialize Gemini Vision for analysis
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if api_key:
+            genai.configure(api_key=api_key)
+            self.vision_model = genai.GenerativeModel(config.QA_MODEL_NAME) # Use the smart model (Gemini 2.5 Pro)
+        else:
+            logger.error("GOOGLE_API_KEY not found.")
+            
+        self.style_library = {} # Stores extracted DNA
 
     def _rate_limit(self):
         """Applies rate limiting delay."""
         logger.info(f"Sleeping for {config.PROMPT_GEN_DELAY}s (Rate Limit)...")
         time.sleep(config.PROMPT_GEN_DELAY)
 
-    def _inject_style(self, base_prompt):
+    def analyze_assets(self):
         """
-        Injects the mandatory style tags into the prompt.
+        Analyzes reference assets to extract Shared Visual DNA.
         """
-        style_tags = (
-            "black and white line art, coloring book style for kids ages 4-8, "
-            "thick uniform vector lines, high contrast, clear outlines, "
-            "modern cartoon style, expressive eyes, heroic proportions, "
-            "cute but detailed, no shading, no gray, 300 dpi"
-        )
-        return f"{base_prompt}, {style_tags}"
-
-    def generate_mission_briefing(self, theme):
-        """
-        Generates the prompt for Page 1: Mission Briefing.
-        """
-        self._rate_limit()
-        prompt = (
-            f"title page design, a large bold outline of a magnifying glass in the center (empty inside), "
-            f"central area is clean white space, surrounded by a border frame composed of small cute {theme} icons "
-            f"arranged along the edges, white background"
-        )
-        return self._inject_style(prompt)
-
-    def generate_knolling_prompt(self, theme, items):
-        """
-        Generates the prompt for the Left Page (Knolling).
-        """
-        self._rate_limit()
-        items_str = ", ".join(items)
-        prompt = (
-            f"knolling photography layout, flat lay, {theme} parts/gear, "
-            f"organized grid arrangement of {items_str}, "
-            f"objects are arranged in the top 75% of the image, "
-            f"leaving empty white space at the bottom 25%, "
-            f"simple shapes, no text"
-        )
-        return self._inject_style(prompt)
-
-    def generate_action_prompt(self, theme, action, items, background):
-        """
-        Generates the prompt for the Right Page (Action).
-        """
-        self._rate_limit()
-        items_str = ", ".join(items)
-        prompt = (
-            f"{theme} in an action pose, full body shot, wearing/using {items_str}, "
-            f"interacting with {background}, dynamic composition, "
-            f"dynamic pose, immersive background"
-        )
-        return self._inject_style(prompt)
-
-    def generate_certificate(self, theme):
-        """
-        Generates the prompt for Page 50: Certificate.
-        """
-        self._rate_limit()
-        prompt = (
-            f"certificate of completion design, a rectangular border frame composed of neat rows of diverse unique {theme} items "
-            f"arranged side-by-side, no repeating patterns, organized knolling style border, "
-            f"empty center space for text, clean white background, official document style"
-        )
-        return self._inject_style(prompt)
+        logger.info("Agent Bravo: Analyzing assets for Visual DNA...")
+        
+        asset_types = [
+            "cover", "page_01", "page_02", "page_03", 
+            "knolling", "action", "certificate"
+        ]
+        
+        for asset_type in asset_types:
+            # Find all matching files
+            files = glob.glob(f"assets/ref_{asset_type}_*.png")
+            if not files:
+                logger.warning(f"No reference images found for {asset_type}. Using default style.")
+                self.style_library[f"dna_{asset_type}"] = "[Default Style: Black and white line art, coloring book style]"
+                continue
+                
+            logger.info(f"Analyzing {len(files)} images for {asset_type}...")
+            
+            try:
+                # Load images
+                images = [Image.open(f) for f in files[:5]] # Limit to 5 max
+                
+                prompt = (
+                    f"Analyze these {len(images)} reference images collectively. "
+                    "Ignore specific characters or objects. "
+                    "Extract the 'Shared Visual DNA' (line weight, shading rules, composition layout, whitespace usage) "
+                    "into a detailed, comma-separated style description string. "
+                    "Focus on technical artistic attributes suitable for an image generation prompt."
+                )
+                
+                self._rate_limit()
+                response = self.vision_model.generate_content([prompt, *images])
+                dna = response.text.strip()
+                self.style_library[f"dna_{asset_type}"] = dna
+                logger.info(f"Extracted DNA for {asset_type}: {dna[:50]}...")
+                
+            except Exception as e:
+                logger.error(f"Failed to analyze assets for {asset_type}: {e}")
+                self.style_library[f"dna_{asset_type}"] = "[Fallback Style: Black and white line art]"
 
     def generate_cover(self, theme, main_character, gear_objects):
         """
-        Generates the prompt for the Cover Art.
+        Generates the prompt for the Cover Art using Blueprint + Wireframe + DNA.
         """
+        logger.info("Generating Cover Prompt via Blueprint...")
         self._rate_limit()
-        prompt = (
-            f"a seamless panoramic book cover design for kids, wide aspect ratio, {theme} theme. "
-            f"Right Side (Front): Huge title text 'KNOLLING ADVENTURES' at top, subtitle below. "
-            f"Top left area features bold, floating 'sticker-style' {gear_objects}. "
-            f"Bottom right features cute heroic {main_character} in dynamic action, making eye contact, moving towards center. "
-            f"Left Side (Back): Continuation of background. Top left features more floating {gear_objects}. "
-            f"Below are two realistic 'paper mockup' style page previews (Left: Knolling, Right: Action) with white borders and drop shadows. "
-            f"A mini {main_character} is pointing at the previews. Blurb text below. Bottom right corner is empty background space. "
-            f"Style: Flat vector illustration, vibrant colors, thick clean outlines, high energy"
+        
+        # 1. Load Blueprint Text
+        # 1. Load Blueprint Text
+        blueprint_path = "docs/MASTER_COVER_BLUEPRINT_v1.0.md"
+        blueprint_text = ""
+        if os.path.exists(blueprint_path):
+            with open(blueprint_path, "r") as f:
+                blueprint_text = f.read()
+        else:
+            logger.warning("Blueprint file not found!")
+            
+        # 2. Load Wireframe Image
+        wireframe_path = "assets/ref_cover_layout_wireframe_kdp.png"
+        wireframe_img = None
+        if os.path.exists(wireframe_path):
+            wireframe_img = Image.open(wireframe_path)
+        else:
+            logger.warning("Wireframe image not found!")
+
+        # 3. Construct Meta-Prompt for Gemini
+        dna_cover = self.style_library.get("dna_cover", "")
+        
+        meta_prompt = (
+            "Act as an Expert Art Director. Construct a highly detailed image generation prompt for Imagen 4.0.\n\n"
+            f"THEME: {theme}\n"
+            f"MAIN CHARACTER: {main_character}\n"
+            f"GEAR: {gear_objects}\n"
+            f"STYLE DNA: {dna_cover}\n\n"
+            "REFERENCE DOCUMENTS:\n"
+            f"1. BLUEPRINT TEXT:\n{blueprint_text}\n\n"
+            "2. WIREFRAME IMAGE (Attached): This defines the strict spatial layout. "
+            "Red=Title, Yellow=Marketing, Green=Stickers, Blue=Mini-Char, White=Main-Char, Black=Logo Zone.\n\n"
+            "INSTRUCTION:\n"
+            "Write a single, seamless panoramic image prompt. "
+            "Describe the visual elements exactly as defined in the Blueprint and Wireframe. "
+            "Explicitly instruct the generator to leave the 'Black Zone' (Zone 8) empty or reserved for the 'assets/logo.png' overlay. "
+            "Combine the Blueprint structure with the Style DNA. "
+            "Output ONLY the raw prompt string, no markdown."
         )
-        # So we don't use _inject_style here, but append specific cover style
-        return f"{prompt}, 300 dpi"
+        
+        try:
+            inputs = [meta_prompt]
+            if wireframe_img:
+                inputs.append(wireframe_img)
+                
+            response = self.vision_model.generate_content(inputs)
+            final_prompt = response.text.strip()
+            return final_prompt
+            
+        except Exception as e:
+            logger.error(f"Failed to generate cover prompt: {e}")
+            return f"A seamless panoramic book cover for {theme}, {dna_cover}"
 
     def generate_prompts(self, theme):
         """
-        Generates all interior prompts and returns context for consistency.
-        Returns:
-            dict: {
-                "prompts": [list of prompt dicts],
-                "main_character": str,
-                "gear_objects": str
-            }
+        Generates all interior prompts using Multi-Shot DNA.
         """
-        # Define Context (Centralized Source of Truth)
-        # In a real app, these might be randomized or more detailed
+        # 1. Analyze Assets first
+        self.analyze_assets()
+        
+        # Define Context
         items = ["Helmet", "Hose", "Ladder", "Axe", "Boots"] 
         main_character = f"Heroic {theme}"
         gear_objects = ", ".join(items)
         
         prompts = []
         
+        # Helper to get DNA
+        def get_dna(key):
+            return self.style_library.get(key, "black and white line art")
+
         # Page 1: Mission Briefing
+        self._rate_limit()
         prompts.append({
             "type": "mission",
-            "prompt": self.generate_mission_briefing(theme)
+            "prompt": f"{get_dna('dna_page_01')}, title page design for {theme}, magnifying glass outline, central area clean, border of {theme} icons."
+        })
+        
+        # Page 2: Note to Parents
+        self._rate_limit()
+        prompts.append({
+            "type": "parents",
+            "prompt": f"{get_dna('dna_page_02')}, instructional page layout, {theme} theme, cute border frame, large empty central area for text, 'Note to Parents' header style."
+        })
+
+        # Page 3: Intro
+        self._rate_limit()
+        prompts.append({
+            "type": "intro",
+            "prompt": f"{get_dna('dna_page_03')}, 'Are you ready to explore?' theme, {main_character} waving hello, minimal background, space for dedication text."
         })
         
         # Demo: Just 1 Spread (Page 4 & 5)
+        self._rate_limit()
         prompts.append({
             "type": "knolling",
-            "prompt": self.generate_knolling_prompt(theme, items)
+            "prompt": f"{get_dna('dna_knolling')}, knolling photography layout, flat lay, {theme} parts, organized grid of {gear_objects}, top 75% filled, bottom 25% empty white space."
         })
+        
+        self._rate_limit()
         prompts.append({
             "type": "action",
-            "prompt": self.generate_action_prompt(theme, "fighting fire", items, "burning building")
+            "prompt": f"{get_dna('dna_action')}, {theme} in action pose, wearing {gear_objects}, dynamic composition, {main_character} description."
+        })
+        
+        # Certificate
+        self._rate_limit()
+        prompts.append({
+            "type": "certificate",
+            "prompt": f"{get_dna('dna_certificate')}, certificate of completion design for {theme}, rectangular border of diverse items, empty center, official document style."
         })
         
         return {
