@@ -26,6 +26,12 @@ class AgentBravo:
             
         self.style_library = {} # Stores extracted DNA
 
+        # 5.2 NEGATIVE DNA LIBRARY
+        self.NEGATIVE_GLOBAL = "text, font, letters, words, watermark, signature, copyright info, barcode, qr code, shading, gradients, grayscale, colored, filled, 3d render, realistic photo, sketch lines, dithering, noise, blur, low quality, pixelated, jpeg artifacts, cropped, cut off, duplicate, deformed"
+        self.NEGATIVE_KNOLLING = "perspective, angled view, isometric, human hands, holding items, messy, overlapping items, shadow, chaotic background, multiple angles, distorted shapes"
+        self.NEGATIVE_ACTION = "knolling grid, static pose, floating objects, multiple horizons, text bubbles, speech balloons, frame border, cut off limbs, babyish proportions, scary"
+        self.NEGATIVE_COVER = "barcode placeholder, price tag, low resolution, dull colors, messy sketch, cutoff character, internal page guides"
+
     def _rate_limit(self):
         """Applies rate limiting delay."""
         logger.info(f"Sleeping for {config.PROMPT_GEN_DELAY}s (Rate Limit)...")
@@ -74,63 +80,115 @@ class AgentBravo:
                 logger.error(f"Failed to analyze assets for {asset_type}: {e}")
                 self.style_library[f"dna_{asset_type}"] = "[Fallback Style: Black and white line art]"
 
-    def generate_cover(self, theme, main_character, gear_objects):
+    def _extract_bible_specs(self, section_tag):
         """
-        Generates the prompt for the Cover Art using Blueprint + Wireframe + DNA.
+        Extracts the specific text block for a given tag from the Series Master Bible.
         """
-        logger.info("Generating Cover Prompt via Blueprint...")
-        self._rate_limit()
-        
-        # 1. Load Blueprint Text
-        # 1. Load Blueprint Text
-        blueprint_path = "docs/MASTER_COVER_BLUEPRINT_v1.0.md"
-        blueprint_text = ""
-        if os.path.exists(blueprint_path):
-            with open(blueprint_path, "r") as f:
-                blueprint_text = f.read()
-        else:
-            logger.warning("Blueprint file not found!")
+        bible_path = "Series Master Bible v5.21.md"
+        if not os.path.exists(bible_path):
+            logger.warning(f"Bible not found at {bible_path}")
+            return ""
             
-        # 2. Load Wireframe Image (Geometry)
-        wireframe_path = "assets/ref_cover_layout_wireframe_kdp.png"
+        try:
+            with open(bible_path, "r") as f:
+                content = f.read()
+                
+            # Find the section
+            start_idx = content.find(section_tag)
+            if start_idx == -1:
+                logger.warning(f"Section {section_tag} not found in Bible.")
+                return ""
+                
+            # Find the next section (starts with #### [) or end of file
+            # We assume sections start with #### [TAG]
+            # We want to capture everything until the next ####
+            
+            # Start after the tag line
+            content_after_tag = content[start_idx:]
+            # Find next header
+            next_header_idx = content_after_tag.find("#### [", 1) 
+            
+            if next_header_idx != -1:
+                return content_after_tag[:next_header_idx].strip()
+            else:
+                return content_after_tag.strip()
+                
+        except Exception as e:
+            logger.error(f"Failed to extract Bible specs: {e}")
+            return ""
+
+    def _generate_smart_prompt(self, page_type, theme, specific_context):
+        """
+        Generates a smart prompt using Wireframe + Structure + DNA.
+        Handles mapping from logical page type to asset filename.
+        """
+        # Asset Mapping
+        asset_map = {
+            "mission": "page1",
+            "parents": "page2",
+            "intro": "page3",
+            "knolling": "page4",
+            "action": "page5",
+            "certificate": "page50",
+            "cover": "cover"
+        }
+        
+        asset_key = asset_map.get(page_type, page_type)
+        logger.info(f"Generating Smart Prompt for {page_type} (Asset Key: {asset_key})...")
+        self._rate_limit()
+
+        # 1. Load Wireframe (Geometry)
+        wireframe_path = f"assets/ref_{asset_key}_layout_wireframe_kdp.png"
         wireframe_img = None
         if os.path.exists(wireframe_path):
             wireframe_img = Image.open(wireframe_path)
         else:
-            logger.warning("Wireframe image not found!")
+            logger.warning(f"Wireframe not found for {asset_key}: {wireframe_path}")
 
-        # 3. Load Structure Example Image (Context)
-        structure_path = "assets/ref_cover_structure_example.png"
+        # 2. Load Structure Example (Context)
+        structure_path = f"assets/ref_{asset_key}_structure_example.png"
         structure_img = None
         if os.path.exists(structure_path):
             structure_img = Image.open(structure_path)
         else:
-            logger.warning("Structure example image not found!")
+            logger.warning(f"Structure example not found for {asset_key}: {structure_path}")
 
-        # 4. Construct Meta-Prompt for Gemini
-        dna_cover = self.style_library.get("dna_cover", "")
-        
+        # 3. Get DNA
+        dna_key = f"dna_{asset_key}"
+        dna = self.style_library.get(dna_key, self.style_library.get("dna_cover", "black and white line art"))
+
+        # 4. Construct Meta-Prompt
+        # CRITICAL: Explicit instruction to ignore colored lines in output
+        color_instruction = ""
+        if page_type != "cover":
+            color_instruction = (
+                "CRITICAL: The Wireframe contains COLORED ZONES (Red/Green/Blue) for reference only. "
+                "The final output must be pure BLACK & WHITE line art. "
+                "Do NOT draw the colored zone lines. Do NOT draw the text labels found in the wireframe. "
+                "Only draw the ILLUSTRATION content inside the zones."
+            )
+        else:
+            color_instruction = "Follow the Wireframe zones for placement. Output full color for the Cover."
+
         meta_prompt = (
             "Act as an Expert Art Director. Construct a highly detailed image generation prompt for Imagen 4.0.\n\n"
             f"THEME: {theme}\n"
-            f"MAIN CHARACTER: {main_character}\n"
-            f"GEAR: {gear_objects}\n"
-            f"STYLE DNA: {dna_cover}\n\n"
+            f"CONTEXT (BIBLE SPECS): {specific_context}\n"
+            f"STYLE DNA: {dna}\n\n"
             "REFERENCE DOCUMENTS:\n"
-            f"1. BLUEPRINT TEXT:\n{blueprint_text}\n\n"
-            "2. WIREFRAME IMAGE (First Image): This defines the STRICT GEOMETRY (X/Y Coordinates). "
-            "Red=Title, Yellow=Marketing, Green=Stickers, Blue=Mini-Char, White=Main-Char, Black=Logo Zone.\n\n"
-            "3. STRUCTURE EXAMPLE (Second Image): This defines the CONTEXT (Layering & Density). "
-            "Observe how the Character overlaps the background. Observe how Stickers float in negative space.\n\n"
+            "1. WIREFRAME IMAGE (First Image): This defines the STRICT GEOMETRY (X/Y Coordinates). "
+            "Follow the layout lines exactly.\n\n"
+            "2. STRUCTURE EXAMPLE (Second Image): This defines the CONTEXT (Layering & Density). "
+            "Observe how elements overlap and fill the space.\n\n"
             "INSTRUCTION:\n"
-            "Write a single, seamless panoramic image prompt. "
+            "Write a single, detailed image prompt.\n"
             "1. GEOMETRY: Follow the Wireframe for placement.\n"
             "2. CONTEXT: Follow the Structure Example for layering/density.\n"
             "3. STYLE: Follow the Style DNA for rendering.\n"
-            "Explicitly instruct the generator to leave the 'Black Zone' (Zone 8) empty or reserved for the 'assets/logo.png' overlay. "
+            f"{color_instruction}\n"
             "Output ONLY the raw prompt string, no markdown."
         )
-        
+
         try:
             inputs = [meta_prompt]
             if wireframe_img:
@@ -140,15 +198,47 @@ class AgentBravo:
                 
             response = self.vision_model.generate_content(inputs)
             final_prompt = response.text.strip()
+            
+            # Append Negative DNA
+            negative_dna = self.NEGATIVE_GLOBAL
+            if page_type == "knolling":
+                negative_dna += f", {self.NEGATIVE_KNOLLING}"
+            elif page_type == "action":
+                negative_dna += f", {self.NEGATIVE_ACTION}"
+            elif page_type == "cover":
+                negative_dna += f", {self.NEGATIVE_COVER}"
+                
+            final_prompt += f" --negative_prompt: {negative_dna}"
+            
             return final_prompt
             
         except Exception as e:
-            logger.error(f"Failed to generate cover prompt: {e}")
-            return f"A seamless panoramic book cover for {theme}, {dna_cover}"
+            logger.error(f"Failed to generate smart prompt for {page_type}: {e}")
+            return f"{specific_context}, {dna} --negative_prompt: {self.NEGATIVE_GLOBAL}"
+
+    def generate_cover(self, theme, main_character, gear_objects):
+        """
+        Generates the prompt for the Cover Art using Blueprint + Wireframe + DNA.
+        """
+        # Load Blueprint Text for Cover specifically
+        blueprint_path = "docs/MASTER_COVER_BLUEPRINT_v1.0.md"
+        blueprint_text = ""
+        if os.path.exists(blueprint_path):
+            with open(blueprint_path, "r") as f:
+                blueprint_text = f.read()
+        
+        context = (
+            f"MAIN CHARACTER: {main_character}\n"
+            f"GEAR: {gear_objects}\n"
+            f"BLUEPRINT: {blueprint_text}\n"
+            "Explicitly instruct the generator to leave the 'Black Zone' (Zone 8) empty or reserved for the 'assets/logo.png' overlay."
+        )
+        
+        return self._generate_smart_prompt("cover", theme, context)
 
     def generate_prompts(self, theme):
         """
-        Generates all interior prompts using Multi-Shot DNA.
+        Generates all interior prompts using Multi-Shot DNA and Smart Prompt Logic.
         """
         # 1. Analyze Assets first
         self.analyze_assets()
@@ -160,49 +250,45 @@ class AgentBravo:
         
         prompts = []
         
-        # Helper to get DNA
-        def get_dna(key):
-            return self.style_library.get(key, "black and white line art")
-
         # Page 1: Mission Briefing
-        self._rate_limit()
+        spec_mission = self._extract_bible_specs("[PAGE_01_MISSION]")
         prompts.append({
             "type": "mission",
-            "prompt": f"{get_dna('dna_page_01')}, title page design for {theme}, magnifying glass outline, central area clean, border of {theme} icons."
+            "prompt": self._generate_smart_prompt("mission", theme, spec_mission or "Title page design, magnifying glass outline.")
         })
         
         # Page 2: Note to Parents
-        self._rate_limit()
+        spec_parents = self._extract_bible_specs("[PAGE_02_PARENTS]")
         prompts.append({
             "type": "parents",
-            "prompt": f"{get_dna('dna_page_02')}, instructional page layout, {theme} theme, cute border frame, large empty central area for text, 'Note to Parents' header style."
+            "prompt": self._generate_smart_prompt("parents", theme, spec_parents or "Instructional page layout, cute border frame.")
         })
 
         # Page 3: Intro
-        self._rate_limit()
+        spec_intro = self._extract_bible_specs("[PAGE_03_START]")
         prompts.append({
             "type": "intro",
-            "prompt": f"{get_dna('dna_page_03')}, 'Are you ready to explore?' theme, {main_character} waving hello, minimal background, space for dedication text."
+            "prompt": self._generate_smart_prompt("intro", theme, spec_intro or f"'Are you ready to explore?' theme, {main_character}.")
         })
         
         # Demo: Just 1 Spread (Page 4 & 5)
-        self._rate_limit()
+        spec_knolling = self._extract_bible_specs("[PAGE_04_KNOLLING]")
         prompts.append({
             "type": "knolling",
-            "prompt": f"{get_dna('dna_knolling')}, knolling photography layout, flat lay, {theme} parts, organized grid of {gear_objects}, top 75% filled, bottom 25% empty white space."
+            "prompt": self._generate_smart_prompt("knolling", theme, spec_knolling or f"Knolling photography layout, {gear_objects}.")
         })
         
-        self._rate_limit()
+        spec_action = self._extract_bible_specs("[PAGE_05_ACTION]")
         prompts.append({
             "type": "action",
-            "prompt": f"{get_dna('dna_action')}, {theme} in action pose, wearing {gear_objects}, dynamic composition, {main_character} description."
+            "prompt": self._generate_smart_prompt("action", theme, spec_action or f"{theme} in action pose, wearing {gear_objects}.")
         })
         
         # Certificate
-        self._rate_limit()
+        spec_cert = self._extract_bible_specs("[PAGE_50_CERTIFICATE]")
         prompts.append({
             "type": "certificate",
-            "prompt": f"{get_dna('dna_certificate')}, certificate of completion design for {theme}, rectangular border of diverse items, empty center, official document style."
+            "prompt": self._generate_smart_prompt("certificate", theme, spec_cert or "Certificate of completion design.")
         })
         
         return {

@@ -21,6 +21,40 @@ class AgentEcho:
         self.width = 8.75 * inch
         self.height = 8.75 * inch
         
+    def apply_color_masking(self, image_path):
+        """
+        [PROTOCOL_COLOR_MASKING]
+        Detects Red/Green pixels (Wireframe artifacts) and replaces them with White.
+        Then converts to Grayscale.
+        """
+        try:
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                datas = img.getdata()
+                
+                new_data = []
+                for item in datas:
+                    # Detect Red (R>200, G<100, B<100) or Green (G>200, R<100, B<100)
+                    if (item[0] > 200 and item[1] < 100 and item[2] < 100) or \
+                       (item[1] > 200 and item[0] < 100 and item[2] < 100):
+                        new_data.append((255, 255, 255)) # Replace with White
+                    else:
+                        new_data.append(item)
+                        
+                img.putdata(new_data)
+                
+                # Convert to Grayscale (L)
+                gray_img = img.convert("L")
+                
+                # Save temp masked version
+                temp_masked = image_path.replace(".png", "_masked.jpg")
+                gray_img.save(temp_masked, quality=95)
+                return temp_masked
+                
+        except Exception as e:
+            logger.error(f"Color masking failed for {image_path}: {e}")
+            return None
+
     def assemble_pdf(self, image_paths):
         """
         Assembles the PDF from the generated images.
@@ -38,24 +72,20 @@ class AgentEcho:
             
             for img_path in image_paths:
                 if os.path.exists(img_path):
-                    # Convert to Grayscale (L) as per Bible
-                    try:
-                        with Image.open(img_path) as img:
-                            gray_img = img.convert("L")
-                            # Save temp grayscale version
-                            temp_gray = img_path.replace(".png", "_gray.jpg")
-                            gray_img.save(temp_gray, quality=95)
-                            
-                            # Draw on Canvas (Full Bleed)
-                            # In a real app, we'd handle left/right page positioning specifically
-                            # For now, we just center/fill
-                            c.drawImage(temp_gray, 0, 0, width=self.width, height=self.height)
-                            c.showPage()
-                            
-                            # Cleanup temp gray
-                            os.remove(temp_gray)
-                    except Exception as e:
-                        logger.error(f"Failed to process image {img_path}: {e}")
+                    # Apply Color Masking & Grayscale Conversion
+                    processed_img_path = self.apply_color_masking(img_path)
+                    
+                    if processed_img_path:
+                        # Draw on Canvas (Full Bleed)
+                        # In a real app, we'd handle left/right page positioning specifically
+                        # For now, we just center/fill
+                        c.drawImage(processed_img_path, 0, 0, width=self.width, height=self.height)
+                        c.showPage()
+                        
+                        # Cleanup temp file
+                        os.remove(processed_img_path)
+                    else:
+                        logger.warning(f"Failed to process image: {img_path}")
                 else:
                     logger.warning(f"Image not found: {img_path}")
             

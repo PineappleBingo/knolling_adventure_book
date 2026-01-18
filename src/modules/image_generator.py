@@ -20,7 +20,7 @@ class AgentCharlie:
         if not self.api_key:
             logger.error("GOOGLE_API_KEY not found.")
         
-        logger.info(f"Using Image Model: {config.IMAGE_MODEL_NAME}")
+        logger.info(f"Using Image Model: {config.GEN_MODEL_ID}")
 
     def generate_image(self, prompt, theme, page_number):
         """
@@ -38,11 +38,13 @@ class AgentCharlie:
         try:
             if config.DEPLOYMENT_TIER == "PAID":
                 # PAID Tier: Imagen 4.0 (:predict endpoint)
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.IMAGE_MODEL_NAME}:predict"
+                # Model ID is now config.GEN_MODEL_ID (e.g., imagen-4.0-generate-001)
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEN_MODEL_ID}:predict"
                 headers = {
                     'Content-Type': 'application/json',
                     'x-goog-api-key': self.api_key
                 }
+                # v5.21 Payload Protocol
                 payload = {
                     "instances": [
                         { "prompt": prompt }
@@ -74,7 +76,7 @@ class AgentCharlie:
             else:
                 # FREE Tier: Gemini 2.0 Flash Exp (:generateContent endpoint)
                 # Handle 'models/' prefix if present in config
-                model_id = config.IMAGE_MODEL_NAME
+                model_id = config.GEN_MODEL_ID
                 if model_id.startswith("models/"):
                     url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent"
                 else:

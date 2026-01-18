@@ -11,18 +11,26 @@ load_dotenv()
 # Deployment Tier: 'FREE' or 'PAID'
 DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
-# Page Count Configuration (Default: 50)
-try:
-    PAGE_COUNT = int(os.getenv("PAGE_COUNT", "50"))
-except ValueError:
-    PAGE_COUNT = 50
+# 0.0 SYSTEM CONFIGURATION (Physical Specs)
+TRIM_WIDTH = 8.5
+TRIM_HEIGHT = 8.5
+BLEED_SIZE = 0.125
+SAFE_MARGIN = 0.375
+PAGE_COUNT = 50
 
-# Image Model Configuration
+# Page Count Configuration (Override from Env)
+try:
+    if os.getenv("PAGE_COUNT"):
+        PAGE_COUNT = int(os.getenv("PAGE_COUNT"))
+except ValueError:
+    pass
+
+# Image Model Configuration (Agent Alpha Logic)
 if DEPLOYMENT_TIER == "PAID":
-    IMAGE_MODEL_NAME = "imagen-4.0-generate-001"
+    GEN_MODEL_ID = "imagen-4.0-generate-001"
 else:
     # FREE Tier: Use Gemini 2.0 Flash Exp (Image Generation)
-    IMAGE_MODEL_NAME = "models/gemini-2.0-flash-exp-image-generation"
+    GEN_MODEL_ID = "models/gemini-2.0-flash-exp-image-generation"
 
 # QA Model Configuration (Same for both tiers)
 QA_MODEL_NAME = "models/gemini-2.5-pro"
@@ -43,6 +51,6 @@ else:
 
 def get_status_message():
     if DEPLOYMENT_TIER == "PAID":
-        return "🚀 Running in PAID mode - Max Speed"
+        return f"🚀 Running in PAID mode ({GEN_MODEL_ID}) - Max Speed"
     else:
-        return "🐢 Running in FREE mode - Safe Limits Active"
+        return f"🐢 Running in FREE mode ({GEN_MODEL_ID}) - Safe Limits Active"
