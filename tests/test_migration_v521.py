@@ -30,8 +30,20 @@ class TestMigrationV521(unittest.TestCase):
             
     def test_negative_dna_injection(self):
         print("\nTesting Negative DNA Injection...")
-        # Mock analyze_assets to avoid API calls
+        
+        # Mock the vision model response
+        class MockResponse:
+            text = "Mock DNA Style"
+            
+        class MockModel:
+            def generate_content(self, inputs):
+                return MockResponse()
+                
+        self.bravo.vision_model = MockModel()
+        
+        # Mock analyze_assets to populate style library without API calls
         self.bravo.style_library['dna_page_01'] = "test_dna"
+        self.bravo.style_library['dna_cover'] = "test_dna"
         
         prompts = self.bravo.generate_prompts("Firefighter")
         mission_prompt = prompts['prompts'][0]['prompt']

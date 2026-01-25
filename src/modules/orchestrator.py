@@ -58,14 +58,26 @@ class AgentOmega:
             # Insert Cover at the beginning
             prompts.insert(0, {
                 "type": "cover",
+                "page_number": 1, # Cover is technically Page 1 in this context, or we can treat it as special. 
+                                  # If user says "1,50", they likely mean Cover (1) and Cert (50).
                 "prompt": cover_prompt
             })
             
             generated_images = []
             preview_images = {} # Store paths by type for preview
             
-            # Limit prompts based on PAGE_COUNT
-            if len(prompts) > config.PAGE_COUNT:
+            # Limit prompts based on TARGET_PAGES or PAGE_COUNT
+            if config.TARGET_PAGES_LIST:
+                logger.info(f"Filtering generation to pages: {config.TARGET_PAGES_LIST}")
+                # Filter prompts where page_number is in TARGET_PAGES_LIST
+                filtered_prompts = []
+                for p in prompts:
+                    # Default to 0 if no page_number (shouldn't happen with new logic)
+                    pg = p.get('page_number', 0)
+                    if pg in config.TARGET_PAGES_LIST:
+                        filtered_prompts.append(p)
+                prompts = filtered_prompts
+            elif len(prompts) > config.PAGE_COUNT:
                 logger.info(f"Limiting generation to {config.PAGE_COUNT} pages (PAGE_COUNT).")
                 prompts = prompts[:config.PAGE_COUNT]
 
@@ -78,11 +90,9 @@ class AgentOmega:
                 logger.info(f"Processing Image {i+1}/{len(prompts)} ({p['type']})...")
                 
                 # Generate
-                # Pass theme and page number (i+1) for naming
-                # For cover (i=0), it will be Page1, but strictly it's Cover.
-                # Let's handle naming convention:
-                # If type is cover, page_number could be "Cover" or 0
-                page_num_str = str(i+1).zfill(2)
+                # Use actual page number for naming
+                pg_num = p.get('page_number', i+1)
+                page_num_str = str(pg_num).zfill(2)
                 if p['type'] == 'cover':
                     page_num_str = "Cover"
                 

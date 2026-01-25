@@ -50,7 +50,15 @@ class AgentBravo:
         
         for asset_type in asset_types:
             # Find all matching files
-            files = glob.glob(f"assets/ref_{asset_type}_*.png")
+            # Strict filtering: Only use *_01.png as the Master Style Reference
+            # This avoids picking up _wireframe or _structure files
+            files = glob.glob(f"assets/ref_{asset_type}_01.png")
+            
+            if not files:
+                # Fallback to broader search but exclude keywords
+                all_files = glob.glob(f"assets/ref_{asset_type}_*.png")
+                files = [f for f in all_files if "_wireframe" not in f and "_structure" not in f]
+            
             if not files:
                 logger.warning(f"No reference images found for {asset_type}. Using default style.")
                 self.style_library[f"dna_{asset_type}"] = "[Default Style: Black and white line art, coloring book style]"
@@ -250,44 +258,50 @@ class AgentBravo:
         
         prompts = []
         
-        # Page 1: Mission Briefing
+        # Page 1: Mission Briefing (System Page 2)
         spec_mission = self._extract_bible_specs("[PAGE_01_MISSION]")
         prompts.append({
             "type": "mission",
+            "page_number": 2,
             "prompt": self._generate_smart_prompt("mission", theme, spec_mission or "Title page design, magnifying glass outline.")
         })
         
-        # Page 2: Note to Parents
+        # Page 2: Note to Parents (System Page 3)
         spec_parents = self._extract_bible_specs("[PAGE_02_PARENTS]")
         prompts.append({
             "type": "parents",
+            "page_number": 3,
             "prompt": self._generate_smart_prompt("parents", theme, spec_parents or "Instructional page layout, cute border frame.")
         })
 
-        # Page 3: Intro
+        # Page 3: Intro (System Page 4)
         spec_intro = self._extract_bible_specs("[PAGE_03_START]")
         prompts.append({
             "type": "intro",
+            "page_number": 4,
             "prompt": self._generate_smart_prompt("intro", theme, spec_intro or f"'Are you ready to explore?' theme, {main_character}.")
         })
         
-        # Demo: Just 1 Spread (Page 4 & 5)
+        # Demo: Just 1 Spread (Page 4 & 5) -> System Page 5 & 6
         spec_knolling = self._extract_bible_specs("[PAGE_04_KNOLLING]")
         prompts.append({
             "type": "knolling",
+            "page_number": 5,
             "prompt": self._generate_smart_prompt("knolling", theme, spec_knolling or f"Knolling photography layout, {gear_objects}.")
         })
         
         spec_action = self._extract_bible_specs("[PAGE_05_ACTION]")
         prompts.append({
             "type": "action",
+            "page_number": 6,
             "prompt": self._generate_smart_prompt("action", theme, spec_action or f"{theme} in action pose, wearing {gear_objects}.")
         })
         
-        # Certificate
+        # Certificate (Page 50)
         spec_cert = self._extract_bible_specs("[PAGE_50_CERTIFICATE]")
         prompts.append({
             "type": "certificate",
+            "page_number": 50,
             "prompt": self._generate_smart_prompt("certificate", theme, spec_cert or "Certificate of completion design.")
         })
         

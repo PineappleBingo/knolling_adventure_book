@@ -25,6 +25,33 @@ try:
 except ValueError:
     pass
 
+# Target Pages Configuration (Specific Pages/Ranges)
+# Format: "1,3,5-7" -> [1, 3, 5, 6, 7]
+TARGET_PAGES_LIST = []
+target_pages_env = os.getenv("TARGET_PAGES")
+if target_pages_env:
+    try:
+        for part in target_pages_env.split(','):
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                TARGET_PAGES_LIST.extend(range(start, end + 1))
+            else:
+                TARGET_PAGES_LIST.append(int(part))
+        # Remove duplicates and sort
+        TARGET_PAGES_LIST = sorted(list(set(TARGET_PAGES_LIST)))
+    except ValueError:
+        print(f"Warning: Invalid TARGET_PAGES format: {target_pages_env}")
+        pass
+
+# Typography Assets (Google Fonts)
+FONT_TITLE_MAIN = "TitanOne-Regular.ttf"
+FONT_SUBTITLE = "Fredoka-Regular.ttf" # Note: Bible says FredokaOne, but file is Fredoka
+FONT_BODY_TEXT = "Quicksand-Bold.ttf"
+FONT_HANDWRITING = "PatrickHand-Regular.ttf"
+FONT_LEGAL = "Sniglet-Regular.ttf"
+
+PATH_FONTS = "assets/fonts/"
+
 # Image Model Configuration (Agent Alpha Logic)
 if DEPLOYMENT_TIER == "PAID":
     GEN_MODEL_ID = "imagen-4.0-generate-001"
