@@ -5,7 +5,7 @@ Mission: Maintain the "Mission Control" Google Sheet.
 
 import logging
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 logger = logging.getLogger("AgentGolf")
@@ -21,7 +21,7 @@ class AgentGolf:
         self.sheet = None
         
         try:
-            self.creds = ServiceAccountCredentials.from_json_keyfile_name(self.creds_file, self.scope)
+            self.creds = Credentials.from_service_account_file(self.creds_file, scopes=self.scope)
             self.client = gspread.authorize(self.creds)
             # Open the first sheet of the "Mission Control" spreadsheet
             # Note: The user must share the sheet with the service account email

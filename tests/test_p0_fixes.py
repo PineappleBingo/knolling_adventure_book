@@ -213,3 +213,23 @@ class TestAgentCharlieV2Features:
         assert hasattr(klass, "_encode_image_to_base64"), (
             "AgentCharlie is missing the '_encode_image_to_base64' method"
         )
+
+
+import unittest
+
+
+class TestAgentAlpha(unittest.TestCase):
+    def test_check_environment_returns_dict(self):
+        from src.modules.system_architect import AgentAlpha
+        result = AgentAlpha().check_environment()
+        self.assertIsInstance(result, dict)
+
+    def test_check_environment_checks_api_key(self):
+        from src.modules.system_architect import AgentAlpha
+        result = AgentAlpha().check_environment()
+        self.assertIn("google_api_key", result)
+
+    def test_check_environment_checks_fonts(self):
+        from src.modules.system_architect import AgentAlpha
+        result = AgentAlpha().check_environment()
+        self.assertIn("fonts", result)

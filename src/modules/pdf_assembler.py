@@ -24,6 +24,9 @@ class AgentEcho:
         # Total Size: 8.75" x 8.75"
         self.width = 8.75 * inch
         self.height = 8.75 * inch
+        # Cover Spread: 17.365" x 8.75" (Back + Spine + Front + Bleeds)
+        self.cover_width = 17.365 * inch
+        self.cover_height = 8.75 * inch
         self._register_fonts()
         
         # Debug mode: Use magenta text for visibility testing
@@ -231,7 +234,13 @@ class AgentEcho:
                         # TASK 3 FIX: CRITICAL LAYER ORDER
                         # Step 1: Draw Image FIRST (Background Layer)
                         logger.info("  1️⃣  Drawing IMAGE layer (background)...")
-                        c.drawImage(processed_img_path, 0, 0, width=self.width, height=self.height)
+                        is_cover = "Cover" in img_path or "cover" in img_path
+                        if is_cover:
+                            page_w, page_h = self.cover_width, self.cover_height
+                        else:
+                            page_w, page_h = self.width, self.height
+                        c.setPageSize((page_w, page_h))
+                        c.drawImage(processed_img_path, 0, 0, width=page_w, height=page_h)
                         
                         # Determine Page Type from filename (MVP heuristic)
                         page_type = "unknown"

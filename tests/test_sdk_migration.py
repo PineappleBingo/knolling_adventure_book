@@ -78,6 +78,21 @@ class TestQaAgentMigration:
         )
 
 
+import unittest
+
+class TestOAuthMigration(unittest.TestCase):
+    def test_tracking_uses_google_auth(self):
+        """tracking.py must use google.oauth2, not oauth2client."""
+        import inspect
+        from unittest.mock import MagicMock
+        sys.modules["gspread"] = MagicMock()
+        if 'src.modules.tracking' in sys.modules:
+            del sys.modules['src.modules.tracking']
+        from src.modules.tracking import AgentGolf
+        source = inspect.getsource(AgentGolf)
+        self.assertNotIn("oauth2client", source)
+
+
 class TestAgentInitialization:
     """Verify the agents can be instantiated without error using a placeholder API key."""
 
