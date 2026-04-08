@@ -71,7 +71,7 @@ class AgentCharlie:
                         f"{prompt}"
                     )
 
-                # v5.21 Payload Protocol
+                # v5.22 Payload Protocol
                 payload = {
                     "instances": [
                         { "prompt": enhanced_prompt }

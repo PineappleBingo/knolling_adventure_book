@@ -96,28 +96,25 @@ Telegram UI (Foxtrot) -> Golf (Log) -> Bravo (Prompts)
 
 ## Progress Tracker
 
-### Complete
+### Complete (100% as of 2026-04-08)
 - Orchestration workflow (Omega)
 - Prompt generation with triangulation + negative DNA (Bravo)
-- Dual-tier image generation via REST (Charlie)
+- Dual-tier image generation via REST with wireframe/ref support (Charlie)
 - QA guard with retry logic (Delta)
-- PDF assembly with text overlay + color masking (Echo)
+- PDF assembly with text overlay, color masking, cover spread dimensions (Echo)
 - Telegram bot with live dashboard (Foxtrot)
-- Google Sheets tracking (Golf)
+- Google Sheets tracking with google-auth (Golf)
 - Deployment tier config + rate limiting (Alpha/config)
+- Agent Alpha environment validation (check_environment)
 - TARGET_PAGES selective generation
 - All assets (fonts, wireframes, structure examples)
-
-### Pending (Priority Order)
-- **P0:** Add `responseModalities` to FREE tier payload
-- **P0:** Fix Bible path from v5.21 to v5.22 in prompt_generator.py:95
-- **P1:** Update FREE tier model to `gemini-2.5-flash-image`
-- **P1:** Wire orchestrator to use image_generator_v2
-- **P1:** Migrate `google-generativeai` -> `google-genai`
-- **P2:** Migrate `oauth2client` -> `google-auth`
-- **P2:** Implement Agent Alpha check_environment()
-- **P2:** Fix AssertionError typo in pdf_assembler.py:197
-- **P2:** Cover spread dimensions (17.365" x 8.75")
+- Bible path updated to v5.22
+- FREE tier: responseModalities + gemini-2.5-flash-image model
+- SDK migration: google-generativeai -> google-genai
+- SDK migration: oauth2client -> google-auth
+- Cover spread dimensions (17.365" x 8.75")
+- Bible typos corrected (MASTER_REF_IMG, models/ prefix)
+- v1/v2 file duplication cleaned up
 
 ## Reference Documents
 - `Series Master Bible v5.22.md` -- SSOT for all design/technical specs
