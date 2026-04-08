@@ -6,7 +6,7 @@ Mission: Build the "Guard" logic (Gemini 1.5 Pro Vision).
 import logging
 import time
 import os
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 from src import config
 
@@ -19,10 +19,11 @@ class AgentDelta:
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             logger.error("GOOGLE_API_KEY not found.")
+            self.genai_client = None
         else:
-            genai.configure(api_key=api_key)
             # Using Gemini 2.5 Pro for strict visual reasoning
-            self.model = genai.GenerativeModel(config.QA_MODEL_NAME)
+            self.genai_client = genai.Client(api_key=api_key)
+        self.model_name = config.QA_MODEL_NAME
 
     def quality_check(self, image_path):
         """
@@ -57,7 +58,10 @@ class AgentDelta:
                 "Reply with 'FAIL: [Reason]' if it fails."
             )
             
-            response = self.model.generate_content([prompt, img])
+            response = self.genai_client.models.generate_content(
+                model=self.model_name,
+                contents=[prompt, img]
+            )
             result = response.text.strip()
             
             logger.info(f"QA Result: {result}")

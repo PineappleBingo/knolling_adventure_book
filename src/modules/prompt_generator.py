@@ -7,7 +7,7 @@ import logging
 import time
 import glob
 import os
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 from src import config
 
@@ -19,10 +19,12 @@ class AgentBravo:
         # Initialize Gemini Vision for analysis
         api_key = os.getenv("GOOGLE_API_KEY")
         if api_key:
-            genai.configure(api_key=api_key)
-            self.vision_model = genai.GenerativeModel(config.QA_MODEL_NAME) # Use the smart model (Gemini 2.5 Pro)
+            self.genai_client = genai.Client(api_key=api_key)
+            self.vision_model_name = config.QA_MODEL_NAME  # Use the smart model (Gemini 2.5 Pro)
         else:
             logger.error("GOOGLE_API_KEY not found.")
+            self.genai_client = None
+            self.vision_model_name = config.QA_MODEL_NAME
             
         self.style_library = {} # Stores extracted DNA
 
@@ -79,7 +81,10 @@ class AgentBravo:
                 )
                 
                 self._rate_limit()
-                response = self.vision_model.generate_content([prompt, *images])
+                response = self.genai_client.models.generate_content(
+                    model=self.vision_model_name,
+                    contents=[prompt, *images]
+                )
                 dna = response.text.strip()
                 self.style_library[f"dna_{asset_type}"] = dna
                 logger.info(f"Extracted DNA for {asset_type}: {dna[:50]}...")
@@ -204,7 +209,10 @@ class AgentBravo:
             if structure_img:
                 inputs.append(structure_img)
                 
-            response = self.vision_model.generate_content(inputs)
+            response = self.genai_client.models.generate_content(
+                model=self.vision_model_name,
+                contents=inputs
+            )
             final_prompt = response.text.strip()
             
             # Append Negative DNA
