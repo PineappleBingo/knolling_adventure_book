@@ -56,8 +56,8 @@ PATH_FONTS = "assets/fonts/"
 if DEPLOYMENT_TIER == "PAID":
     GEN_MODEL_ID = "imagen-4.0-generate-001"
 else:
-    # FREE Tier: Use Gemini 2.0 Flash Exp (Image Generation)
-    GEN_MODEL_ID = "models/gemini-2.0-flash-exp-image-generation"
+    # FREE Tier: Use Gemini 2.5 Flash Image (replaces deprecated gemini-2.0-flash-exp)
+    GEN_MODEL_ID = "gemini-2.5-flash-image"
 
 # QA Model Configuration (Same for both tiers)
 QA_MODEL_NAME = "models/gemini-2.5-pro"
