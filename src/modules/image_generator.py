@@ -22,49 +22,76 @@ class AgentCharlie:
         
         logger.info(f"Using Image Model: {config.GEN_MODEL_ID}")
 
-    def generate_image(self, prompt, theme, page_number):
+    def _encode_image_to_base64(self, image_path):
+        """Encodes an image file to base64 string."""
+        try:
+            with open(image_path, "rb") as img_file:
+                return base64.b64encode(img_file.read()).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Failed to encode image {image_path}: {e}")
+            return None
+
+    def generate_image(self, prompt, theme, page_number, wireframe_path=None, reference_images=None):
         """
         Generates an image based on the prompt using REST API.
+
+        Args:
+            prompt: Text prompt for generation
+            theme: Theme name for filename
+            page_number: Page number for filename
+            wireframe_path: Optional path to wireframe image for layout enforcement
+            reference_images: Optional list of reference image paths for style guidance
         """
         logger.info(f"Generating image for prompt: {prompt[:50]}...")
-        
+
         # Rate Limiting Delay
         logger.info(f"Sleeping for {config.IMG_GEN_DELAY}s (Rate Limit)...")
         time.sleep(config.IMG_GEN_DELAY)
 
         # Clean theme for filename
         safe_theme = "".join(x for x in theme if x.isalnum() or x in " _-").strip().replace(" ", "_")
-        
+
         try:
             if config.DEPLOYMENT_TIER == "PAID":
                 # PAID Tier: Imagen 4.0 (:predict endpoint)
-                # Model ID is now config.GEN_MODEL_ID (e.g., imagen-4.0-generate-001)
+                # NOTE: Imagen 4.0 does not support image input; use enhanced text prompt instead.
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEN_MODEL_ID}:predict"
                 headers = {
                     'Content-Type': 'application/json',
                     'x-goog-api-key': self.api_key
                 }
+
+                # When a wireframe is provided, prepend a layout enforcement instruction.
+                enhanced_prompt = prompt
+                if wireframe_path and os.path.exists(wireframe_path):
+                    logger.warning("PAID Tier: Imagen 4.0 does not support image input. Injecting layout enforcement into text prompt.")
+                    enhanced_prompt = (
+                        f"CRITICAL INSTRUCTION: Follow the structural layout EXACTLY as described. "
+                        f"This is a wireframe-guided generation. Maintain precise zone positioning. "
+                        f"{prompt}"
+                    )
+
                 # v5.21 Payload Protocol
                 payload = {
                     "instances": [
-                        { "prompt": prompt }
+                        { "prompt": enhanced_prompt }
                     ],
                     "parameters": {
                         "sampleCount": 1,
                         "aspectRatio": "1:1"
                     }
                 }
-                
+
                 response = requests.post(url, headers=headers, json=payload)
                 response.raise_for_status()
                 result = response.json()
-                
+
                 # Parse Imagen Response
                 # Expected: {'predictions': [{'bytesBase64Encoded': '...', 'mimeType': 'image/png'}]}
                 if 'predictions' in result and len(result['predictions']) > 0:
                     b64_data = result['predictions'][0]['bytesBase64Encoded']
                     img_data = base64.b64decode(b64_data)
-                    
+
                     filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
                     with open(filename, "wb") as f:
                         f.write(img_data)
@@ -74,7 +101,8 @@ class AgentCharlie:
                     raise ValueError(f"Invalid response from Imagen API: {result}")
 
             else:
-                # FREE Tier: Gemini 2.0 Flash Exp (:generateContent endpoint)
+                # FREE Tier: Gemini Flash (:generateContent endpoint)
+                # Gemini Flash supports multimodal input (text + images).
                 # Handle 'models/' prefix if present in config
                 model_id = config.GEN_MODEL_ID
                 if model_id.startswith("models/"):
@@ -86,19 +114,51 @@ class AgentCharlie:
                     'Content-Type': 'application/json',
                     'x-goog-api-key': self.api_key
                 }
+
+                # Build multimodal parts list; add wireframe and reference images if provided.
+                parts = [{"text": prompt}]
+
+                if wireframe_path and os.path.exists(wireframe_path):
+                    wireframe_b64 = self._encode_image_to_base64(wireframe_path)
+                    if wireframe_b64:
+                        parts.insert(0, {
+                            "inline_data": {
+                                "mime_type": "image/png",
+                                "data": wireframe_b64
+                            }
+                        })
+                        parts.insert(0, {
+                            "text": "WIREFRAME REFERENCE (Follow this layout structure EXACTLY):"
+                        })
+
+                if reference_images:
+                    for ref_path in reference_images:
+                        if os.path.exists(ref_path):
+                            ref_b64 = self._encode_image_to_base64(ref_path)
+                            if ref_b64:
+                                parts.insert(0, {
+                                    "inline_data": {
+                                        "mime_type": "image/png",
+                                        "data": ref_b64
+                                    }
+                                })
+                                parts.insert(0, {
+                                    "text": "STYLE REFERENCE (Match this visual DNA):"
+                                })
+
                 payload = {
                     "contents": [{
-                        "parts": [{"text": prompt}]
+                        "parts": parts
                     }],
                     "generationConfig": {
                         "responseModalities": ["TEXT", "IMAGE"]
                     }
                 }
-                
+
                 response = requests.post(url, headers=headers, json=payload)
                 response.raise_for_status()
                 result = response.json()
-                
+
                 # Parse Gemini Response
                 # Look for inline data in candidates
                 if 'candidates' in result and result['candidates']:
@@ -108,13 +168,13 @@ class AgentCharlie:
                                 if 'inlineData' in part:
                                     b64_data = part['inlineData']['data']
                                     img_data = base64.b64decode(b64_data)
-                                    
+
                                     filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
                                     with open(filename, "wb") as f:
                                         f.write(img_data)
                                     logger.info(f"Image saved to {filename}")
                                     return filename
-                            
+
                 raise ValueError(f"No image found in Gemini Flash response: {result}")
 
         except Exception as e:

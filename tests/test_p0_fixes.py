@@ -157,3 +157,59 @@ class TestModelIDs:
             f"PAID tier GEN_MODEL_ID is '{config.GEN_MODEL_ID}', "
             "expected 'imagen-4.0-generate-001'"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: AgentCharlie v2 features merged into image_generator.py
+# ---------------------------------------------------------------------------
+
+class TestAgentCharlieV2Features:
+    """Verify that v2 features (wireframe_path, reference_images, _encode_image_to_base64)
+    have been merged into the main image_generator.py (AgentCharlie v1)."""
+
+    def _load_agent_charlie(self):
+        """Load AgentCharlie from image_generator.py without triggering API calls."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_agent_charlie_under_test", IMAGE_GENERATOR_PATH
+        )
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            pass  # tolerate missing env vars at import time
+        return getattr(mod, "AgentCharlie", None)
+
+    def test_generate_image_accepts_wireframe_path(self):
+        """AgentCharlie.generate_image must accept a wireframe_path keyword argument."""
+        klass = self._load_agent_charlie()
+        assert klass is not None, "AgentCharlie class not found in image_generator.py"
+        sig = inspect.signature(klass.generate_image)
+        assert "wireframe_path" in sig.parameters, (
+            "generate_image() is missing 'wireframe_path' parameter"
+        )
+        param = sig.parameters["wireframe_path"]
+        assert param.default is None, (
+            "wireframe_path default must be None"
+        )
+
+    def test_generate_image_accepts_reference_images(self):
+        """AgentCharlie.generate_image must accept a reference_images keyword argument."""
+        klass = self._load_agent_charlie()
+        assert klass is not None, "AgentCharlie class not found in image_generator.py"
+        sig = inspect.signature(klass.generate_image)
+        assert "reference_images" in sig.parameters, (
+            "generate_image() is missing 'reference_images' parameter"
+        )
+        param = sig.parameters["reference_images"]
+        assert param.default is None, (
+            "reference_images default must be None"
+        )
+
+    def test_encode_image_to_base64_method_exists(self):
+        """AgentCharlie must have a _encode_image_to_base64 helper method."""
+        klass = self._load_agent_charlie()
+        assert klass is not None, "AgentCharlie class not found in image_generator.py"
+        assert hasattr(klass, "_encode_image_to_base64"), (
+            "AgentCharlie is missing the '_encode_image_to_base64' method"
+        )
