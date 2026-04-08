@@ -89,7 +89,10 @@ class AgentCharlie:
                 payload = {
                     "contents": [{
                         "parts": [{"text": prompt}]
-                    }]
+                    }],
+                    "generationConfig": {
+                        "responseModalities": ["TEXT", "IMAGE"]
+                    }
                 }
                 
                 response = requests.post(url, headers=headers, json=payload)
