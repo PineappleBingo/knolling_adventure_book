@@ -92,7 +92,7 @@ class AgentBravo:
         """
         Extracts the specific text block for a given tag from the Series Master Bible.
         """
-        bible_path = "Series Master Bible v5.21.md"
+        bible_path = "Series Master Bible v5.22.md"
         if not os.path.exists(bible_path):
             logger.warning(f"Bible not found at {bible_path}")
             return ""
