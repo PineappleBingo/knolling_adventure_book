@@ -25,9 +25,9 @@
 * **File Paths:**
     * `PATH_ASSETS`: "assets/"
     * `PATH_FONTS`: "assets/fonts/"
-    * `MASTER_REF_IMG`: "assets/ref_pag2_01.png"
+    * `MASTER_REF_IMG`: "assets/ref_page2_01.png"
 * **AI Models & Settings (Defaults):**
-    * `GEN_MODEL_ID`: "models/imagen-4.0-generate-001" (See Agent Alpha for Tier Logic)
+    * `GEN_MODEL_ID`: "imagen-4.0-generate-001" (See Agent Alpha for Tier Logic)
     * `QA_MODEL_ID`: "models/gemini-2.0-flash-exp" (or latest stable)
     * `MAX_RETRIES`: 3
     * `GEN_DELAY`: 2.0 (seconds)
