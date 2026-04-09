@@ -6,6 +6,7 @@ Mission: Handle PDF assembly with VERIFIED text overlay compositing.
 import logging
 import os
 import time
+from datetime import datetime
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from reportlab.lib.colors import Color, magenta, black
@@ -214,7 +215,7 @@ class AgentEcho:
             logger.error("❌ No images to assemble.")
             return None
             
-        output_filename = f"temp/Knolling_Adventure_{int(time.time())}.pdf"
+        output_filename = f"temp/Knolling_Adventure_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
         logger.info(f"📄 Assembling PDF: {output_filename}")
         logger.info("=" * 80)
         logger.info("LAYER ORDER VERIFICATION (CRITICAL FOR TEXT VISIBILITY)")

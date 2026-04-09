@@ -48,19 +48,21 @@ class AgentOmega:
             prompt_data = self.bravo.generate_prompts(theme)
             prompts = prompt_data['prompts']
             
-            # Generate Cover using the SAME context
-            cover_prompt = self.bravo.generate_cover(
-                theme, 
-                prompt_data['main_character'], 
+            # Generate Cover using the SAME context (4-tuple)
+            cover_prompt, cover_wf, cover_refs, cover_neg = self.bravo.generate_cover(
+                theme,
+                prompt_data['main_character'],
                 prompt_data['gear_objects']
             )
-            
+
             # Insert Cover at the beginning
             prompts.insert(0, {
                 "type": "cover",
-                "page_number": 1, # Cover is technically Page 1 in this context, or we can treat it as special. 
-                                  # If user says "1,50", they likely mean Cover (1) and Cert (50).
-                "prompt": cover_prompt
+                "page_number": 1,
+                "prompt": cover_prompt,
+                "wireframe_path": cover_wf,
+                "reference_images": cover_refs,
+                "negative_dna": cover_neg
             })
             
             generated_images = []
@@ -96,18 +98,34 @@ class AgentOmega:
                 if p['type'] == 'cover':
                     page_num_str = "Cover"
                 
-                image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
-                
-                # QA Check (Retry Loop)
+                # Resolve wireframe + reference image paths + negative DNA for multimodal input
+                wireframe_path = p.get('wireframe_path')
+                reference_images = p.get('reference_images')
+                negative_dna = p.get('negative_dna')
+
+                image_path = self.charlie.generate_image(
+                    p['prompt'], theme, page_num_str,
+                    wireframe_path=wireframe_path,
+                    reference_images=reference_images,
+                    negative_dna=negative_dna
+                )
+
+                # QA Check (Retry Loop) — pass first reference image for comparison
+                qa_ref = reference_images[0] if reference_images else None
                 passed = False
                 retries = 0
                 while not passed and retries < 3:
-                    passed = self.delta.quality_check(image_path)
+                    passed = self.delta.quality_check(image_path, reference_image_path=qa_ref)
                     if not passed:
                         logger.warning(f"Image {i+1} failed QA. Retrying ({retries+1}/3)...")
                         retries += 1
                         # Retry generation
-                        image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
+                        image_path = self.charlie.generate_image(
+                            p['prompt'], theme, page_num_str,
+                            wireframe_path=wireframe_path,
+                            reference_images=reference_images,
+                            negative_dna=negative_dna
+                        )
                 
                 if passed:
                     generated_images.append(image_path)

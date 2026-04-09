@@ -9,6 +9,7 @@ import os
 import requests
 import json
 import base64
+from datetime import datetime
 from src import config
 
 logger = logging.getLogger("AgentCharlie")
@@ -31,7 +32,7 @@ class AgentCharlie:
             logger.error(f"Failed to encode image {image_path}: {e}")
             return None
 
-    def generate_image(self, prompt, theme, page_number, wireframe_path=None, reference_images=None):
+    def generate_image(self, prompt, theme, page_number, wireframe_path=None, reference_images=None, negative_dna=None):
         """
         Generates an image based on the prompt using REST API.
 
@@ -41,6 +42,7 @@ class AgentCharlie:
             page_number: Page number for filename
             wireframe_path: Optional path to wireframe image for layout enforcement
             reference_images: Optional list of reference image paths for style guidance
+            negative_dna: Optional negative prompt text (exclusion list)
         """
         logger.info(f"Generating image for prompt: {prompt[:50]}...")
 
@@ -72,14 +74,18 @@ class AgentCharlie:
                     )
 
                 # v5.22 Payload Protocol
+                parameters = {
+                    "sampleCount": 1,
+                    "aspectRatio": "1:1"
+                }
+                if negative_dna:
+                    parameters["negativePrompt"] = negative_dna
+
                 payload = {
                     "instances": [
                         { "prompt": enhanced_prompt }
                     ],
-                    "parameters": {
-                        "sampleCount": 1,
-                        "aspectRatio": "1:1"
-                    }
+                    "parameters": parameters
                 }
 
                 response = requests.post(url, headers=headers, json=payload)
@@ -92,7 +98,7 @@ class AgentCharlie:
                     b64_data = result['predictions'][0]['bytesBase64Encoded']
                     img_data = base64.b64decode(b64_data)
 
-                    filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
+                    filename = f"temp/{safe_theme}_Page{page_number}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
                     with open(filename, "wb") as f:
                         f.write(img_data)
                     logger.info(f"Image saved to {filename}")
@@ -116,7 +122,13 @@ class AgentCharlie:
                 }
 
                 # Build multimodal parts list; add wireframe and reference images if provided.
-                parts = [{"text": prompt}]
+                parts = []
+
+                # Prepend negative DNA as explicit exclusion instruction
+                if negative_dna:
+                    parts.append({"text": f"IMPORTANT: Do NOT include any of the following in the generated image: {negative_dna}"})
+
+                parts.append({"text": prompt})
 
                 if wireframe_path and os.path.exists(wireframe_path):
                     wireframe_b64 = self._encode_image_to_base64(wireframe_path)
@@ -169,7 +181,7 @@ class AgentCharlie:
                                     b64_data = part['inlineData']['data']
                                     img_data = base64.b64decode(b64_data)
 
-                                    filename = f"temp/{safe_theme}_Page{page_number}_{int(time.time())}.png"
+                                    filename = f"temp/{safe_theme}_Page{page_number}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
                                     with open(filename, "wb") as f:
                                         f.write(img_data)
                                     logger.info(f"Image saved to {filename}")
