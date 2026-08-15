@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from datetime import datetime
+import numpy as np
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from reportlab.lib.colors import Color, magenta, black
@@ -20,11 +21,12 @@ logger = logging.getLogger("AgentEcho")
 class AgentEcho:
     def __init__(self):
         logger.info("Agent Echo v2.0 initialized (with Text Overlay Debugging).")
-        # Bible Specs: 8.5" x 8.5" Trim Size
-        # Bleed: 0.125" on all sides
-        # Total Size: 8.75" x 8.75"
-        self.width = 8.75 * inch
-        self.height = 8.75 * inch
+        # Bible Specs (§1.4): 8.5" x 8.5" trim. KDP bleed extends TOP/BOTTOM/OUTER
+        # edges only — never the binding edge — so the interior page canvas is
+        # 8.625" x 8.75" (w: 8.5 + 0.125 outer; h: 8.5 + 0.125 top + 0.125 bottom).
+        # The old square 8.75 x 8.75 canvas was a spec violation.
+        self.width = (config.TRIM_WIDTH + config.BLEED_SIZE) * inch
+        self.height = (config.TRIM_HEIGHT + 2 * config.BLEED_SIZE) * inch
         # Cover Spread: Back + Spine + Front + Bleeds — spine width depends on
         # PAGE_COUNT, so the spread is computed, not hardcoded (17.365" was only
         # correct for exactly 50 pages).
@@ -65,37 +67,35 @@ class AgentEcho:
                 "Text overlay cannot render without them."
             )
         
+    # Saturation above this marks a pixel as a colored wireframe guide.
+    # Black line art and white paper both have ~0 channel spread.
+    MASK_SATURATION_THRESHOLD = 60
+
     def apply_color_masking(self, image_path):
         """
         [PROTOCOL_COLOR_MASKING]
-        Detects Red/Green pixels (Wireframe artifacts) and replaces them with White.
-        Then converts to Grayscale.
+        Whites out ANY saturated pixel (Red/Green/Blue wireframe guides — the old
+        per-pixel loop only caught R and G, letting blue guides print as gray),
+        then converts to grayscale. Vectorized with numpy: a 300-DPI page is
+        ~6.9M pixels, which the previous pure-Python loop handled one at a time.
+        Saves lossless PNG — JPEG ringing on 1-bit line art is a classic KDP
+        print-QA rejection.
         """
         try:
             with Image.open(image_path) as img:
-                img = img.convert("RGB")
-                datas = img.getdata()
-                
-                new_data = []
-                for item in datas:
-                    # Detect Red (R>200, G<100, B<100) or Green (G>200, R<100, B<100)
-                    if (item[0] > 200 and item[1] < 100 and item[2] < 100) or \
-                       (item[1] > 200 and item[0] < 100 and item[2] < 100):
-                        new_data.append((255, 255, 255)) # Replace with White
-                    else:
-                        new_data.append(item)
-                        
-                img.putdata(new_data)
-                
-                # Convert to Grayscale (L)
-                gray_img = img.convert("L")
-                
-                # Save temp masked version
-                temp_masked = image_path.replace(".png", "_masked.jpg")
-                gray_img.save(temp_masked, quality=95)
-                logger.info(f"✅ Color masking applied: {temp_masked}")
-                return temp_masked
-                
+                arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+
+            saturation = arr.max(axis=2) - arr.min(axis=2)
+            arr[saturation > self.MASK_SATURATION_THRESHOLD] = 255
+
+            gray_img = Image.fromarray(arr.astype(np.uint8)).convert("L")
+
+            base, _ = os.path.splitext(image_path)
+            temp_masked = f"{base}_masked.png"
+            gray_img.save(temp_masked)
+            logger.info(f"✅ Color masking applied: {temp_masked}")
+            return temp_masked
+
         except Exception as e:
             logger.error(f"❌ Color masking failed for {image_path}: {e}")
             return None

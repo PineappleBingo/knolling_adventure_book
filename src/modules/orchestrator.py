@@ -13,6 +13,7 @@ from src.modules.prompt_generator import AgentBravo
 from src.modules.image_generator import AgentCharlie
 from src.modules.qa_agent import AgentDelta
 from src.modules.pdf_assembler import AgentEcho
+from src.modules.kdp_validator import KDPValidator
 
 logger = logging.getLogger("AgentOmega")
 
@@ -178,19 +179,26 @@ class AgentOmega:
                     "subtitle": f"{theme.title()} Edition",
                 }
                 pdf_path = self.echo.assemble_pdf(generated_pages, cover_text=cover_text)
-                
-                # 5. Finish
-                # In real app, upload to Drive and get link
-                drive_link = f"file://{pdf_path}" 
+
+                # 5. KDP print-quality gate — a failing book is not "done"
+                validator = KDPValidator()
+                kdp_report = validator.validate(pdf_path)
+                if progress_callback:
+                    await progress_callback(validator.summary_text(kdp_report))
+
+                # 6. Finish
+                drive_link = f"file://{pdf_path}"
                 self.golf.finish_job(run_id, drive_link)
-                logger.info(f"Job {run_id} completed successfully.")
-                
+                logger.info(f"Job {run_id} completed "
+                            f"({'KDP-ready' if kdp_report['passed'] else 'KDP pre-flight FAILED'}).")
+
                 return {
-                    "status": "SUCCESS",
+                    "status": "SUCCESS" if kdp_report["passed"] else "NEEDS_ATTENTION",
                     "run_id": run_id,
                     "pdf_path": pdf_path,
                     "drive_link": drive_link,
-                    "previews": preview_images
+                    "previews": preview_images,
+                    "kdp_report": kdp_report
                 }
             else:
                 error_msg = "No images generated. Job failed."

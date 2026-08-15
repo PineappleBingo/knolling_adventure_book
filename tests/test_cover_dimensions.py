@@ -23,11 +23,13 @@ class TestCoverDimensions(unittest.TestCase):
         _, expected_h = config.get_cover_spread_size()
         self.assertAlmostEqual(echo.cover_height, expected_h * inch, places=2)
 
-    def test_internal_page_dimensions_unchanged(self):
+    def test_internal_page_dimensions_match_bible(self):
+        # Bible §1.4: interior canvas 8.625" x 8.75" — bleed extends top/bottom/
+        # outer edges only, never the binding edge
         from src.modules.pdf_assembler import AgentEcho
         echo = AgentEcho()
-        self.assertAlmostEqual(echo.width, 8.75 * inch, places=1)
-        self.assertAlmostEqual(echo.height, 8.75 * inch, places=1)
+        self.assertAlmostEqual(echo.width, 8.625 * inch, places=2)
+        self.assertAlmostEqual(echo.height, 8.75 * inch, places=2)
 
 if __name__ == '__main__':
     unittest.main()

@@ -6,7 +6,7 @@
 - **Target Audience:** Ages 4-8
 - **Purpose:** Automated generation of children's coloring books via AI image generation + PDF assembly
 - **Interface:** Telegram Bot (`/generate [Theme]`)
-- **Status:** ~80% functional (see Progress Tracker below)
+- **Status:** Pipeline verified end-to-end with synthetic art (2026-08). BLOCKED on restoring the 21 reference PNGs into `assets/` (see `assets/MANIFEST.md`) and a live API smoke run.
 
 ## Build & Run
 
@@ -28,8 +28,12 @@ pip install -r <(pipenv requirements)
 ```
 GOOGLE_API_KEY=<required>
 TELEGRAM_TOKEN=<required>
-DEPLOYMENT_TIER=FREE|PAID        # Controls model selection + rate limits
-PAGE_COUNT=50                     # Default page count
+DEPLOYMENT_TIER=FREE|PAID        # Rate limits only (model selection moved to QUALITY_MODE)
+QUALITY_MODE=DRAFT|FINAL          # DRAFT=gemini-2.5-flash-image, FINAL=gemini-3-pro-image
+IMAGE_SIZE=2K                     # FINAL mode interior resolution (1K/2K/4K)
+COVER_IMAGE_SIZE=4K               # FINAL mode cover resolution
+ALLOW_DEGRADED_ASSETS=false       # true = permit runs with missing reference assets (debug only)
+PAGE_COUNT=50                     # Default page count (drives spine width)
 TARGET_PAGES=1,50                 # Optional: specific pages to generate
 PDF_DEBUG_MODE=false              # Set true for magenta text overlay debugging
 ```
@@ -74,27 +78,41 @@ Telegram UI (Foxtrot) -> Golf (Log) -> Bravo (Prompts)
 | Foxtrot | Telegram UI | `src/modules/bot_interface.py` | Live dashboard, proof delivery |
 | Golf | Tracking | `src/modules/tracking.py` | Google Sheets "Mission Control" |
 
-### API Configuration (Verified April 2026)
+### API Configuration (Verified August 2026)
 
-**PAID Tier (Imagen 4.0):**
-- Model: `imagen-4.0-generate-001`
-- Endpoint: `POST .../models/{model}:predict`
-- Payload: `instances[].prompt` + `parameters.sampleCount/aspectRatio`
-- Response: `predictions[].bytesBase64Encoded`
+Imagen is RETIRED: `imagen-4.0-generate-001:predict` accepts no image input, so it
+silently dropped every reference image (a root cause of style drift). Both quality
+modes now share one multimodal path:
 
-**FREE Tier (Gemini Image Gen):**
-- Model: `gemini-2.5-flash-image` (current -- replaces deprecated `gemini-2.0-flash-exp`)
+**DRAFT mode:** `gemini-2.5-flash-image` (~1K output, up to 5 reference images)
+**FINAL mode:** `gemini-3-pro-image` / Nano Banana Pro (up to 14 refs, 1K/2K/4K)
+
 - Endpoint: `POST .../models/{model}:generateContent`
 - **Required:** `generationConfig.responseModalities: ["TEXT", "IMAGE"]`
+- `generationConfig.imageConfig`: `aspectRatio` (+ `imageSize` on gemini-3 only)
+- Parts order: role-labeled reference images (style ref, structure example,
+  wireframe) first, operative prompt LAST
 - Response: `candidates[].content.parts[].inlineData.data`
+
+**Cover:** front + back generated as separate 1:1 art; Agent Echo composites the
+KDP spread (spine width = PAGE_COUNT x 0.002252") and draws title/subtitle/logo
+in real fonts. Typography is never AI-rendered.
 
 ## Key Technical Constraints
 - Image generation MUST use REST API via `requests` (Agent Charlie), NOT the deprecated `google-generativeai` SDK
+- NOTE: `.agent/*.md` role docs predate 2026-04-08 and list already-fixed bugs as open -- trust CLAUDE.md + code over them
 - Text overlay is programmatic via ReportLab (Agent Echo), NOT AI-generated
 - All text content/coordinates sourced from Bible Section 1.6 GLOBAL_BLUEPRINT_SPECS
 - Page 50 requires `[PROTOCOL_COLOR_MASKING]` -- detect and remove Red/Green/Blue wireframe artifacts
 
 ## Progress Tracker
+
+### Session 2026-08 (Claude Code handoff continuation)
+- P0: assets tracked + manifest, fonts restored, hard preflight gate (assert_ready_for_generation)
+- P1: zero-text bug fixed (metadata page classification), fail-fast fonts, HTTP retry/timeouts, JSON QA verdicts, QA-feedback retries, test suite repaired (51 passing + reproduce_e2e SUCCESS)
+- P2: QUALITY_MODE re-tiering, Imagen retired, single-round-trip deterministic prompts, all 3 reference types reach the image model, theme-driven gear, composited cover spread
+- P3: numpy saturation masking (incl. blue), lossless PNG line art, Bible-correct 8.625"x8.75" interior canvas, KDP validator gate wired into the orchestrator
+- REMAINING: restore 21 reference PNGs (assets/MANIFEST.md), live API smoke run, gemini-3-pro-image access probe, page scale-out decision, .agent/*.md roster refresh
 
 ### Complete (100% as of 2026-04-08)
 - Orchestration workflow (Omega)
