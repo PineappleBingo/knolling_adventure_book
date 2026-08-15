@@ -119,10 +119,12 @@ class TestResponseModalities:
 # ---------------------------------------------------------------------------
 
 class TestModelIDs:
-    def _load_config(self, tier: str) -> types.ModuleType:
-        """Load src/config.py with DEPLOYMENT_TIER forced to *tier*."""
+    def _load_config(self, tier: str = "FREE", quality: str = "DRAFT") -> types.ModuleType:
+        """Load src/config.py with DEPLOYMENT_TIER / QUALITY_MODE forced."""
         old_tier = os.environ.get("DEPLOYMENT_TIER")
+        old_quality = os.environ.get("QUALITY_MODE")
         os.environ["DEPLOYMENT_TIER"] = tier
+        os.environ["QUALITY_MODE"] = quality
         try:
             import importlib.util
             spec = importlib.util.spec_from_file_location("_config_under_test", CONFIG_PATH)
@@ -133,6 +135,10 @@ class TestModelIDs:
                 os.environ.pop("DEPLOYMENT_TIER", None)
             else:
                 os.environ["DEPLOYMENT_TIER"] = old_tier
+            if old_quality is None:
+                os.environ.pop("QUALITY_MODE", None)
+            else:
+                os.environ["QUALITY_MODE"] = old_quality
         return mod
 
     def test_free_tier_model_id(self):
@@ -150,13 +156,25 @@ class TestModelIDs:
             "FREE tier is still using the deprecated gemini-2.0-flash-exp model"
         )
 
-    def test_paid_tier_model_id(self):
-        """PAID tier config must produce model ID 'imagen-4.0-generate-001'."""
-        config = self._load_config("PAID")
-        assert config.GEN_MODEL_ID == "imagen-4.0-generate-001", (
-            f"PAID tier GEN_MODEL_ID is '{config.GEN_MODEL_ID}', "
-            "expected 'imagen-4.0-generate-001'"
+    def test_final_quality_mode_model_id(self):
+        """FINAL quality mode must select gemini-3-pro-image (Nano Banana Pro).
+        Imagen was retired: its :predict endpoint cannot accept reference images."""
+        config = self._load_config(quality="FINAL")
+        assert config.GEN_MODEL_ID == "gemini-3-pro-image", (
+            f"FINAL mode GEN_MODEL_ID is '{config.GEN_MODEL_ID}', "
+            "expected 'gemini-3-pro-image'"
         )
+        assert config.IMAGE_SIZE in ("1K", "2K", "4K")
+        assert config.COVER_IMAGE_SIZE == "4K"
+
+    def test_imagen_fully_retired(self):
+        """No CODE path may select an Imagen model or build a :predict URL
+        (comments explaining the retirement are fine)."""
+        for path in (CONFIG_PATH, IMAGE_GENERATOR_PATH):
+            source = _get_source(path)
+            assert 'GEN_MODEL_ID = "imagen' not in source, f"Imagen model ID still assigned in {path}"
+            assert ':predict"' not in source, f"Imagen :predict URL still built in {path}"
+            assert '"instances"' not in source, f"Imagen :predict payload still built in {path}"
 
 
 # ---------------------------------------------------------------------------

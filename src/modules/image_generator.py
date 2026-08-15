@@ -71,7 +71,9 @@ class AgentCharlie:
             logger.error(f"Failed to encode image {image_path}: {e}")
             return None
 
-    def generate_image(self, prompt, theme, page_number, wireframe_path=None, reference_images=None, negative_dna=None):
+    def generate_image(self, prompt, theme, page_number, wireframe_path=None,
+                       reference_images=None, negative_dna=None,
+                       aspect_ratio=None, image_size=None):
         """
         Generates an image based on the prompt using REST API.
 
@@ -80,8 +82,11 @@ class AgentCharlie:
             theme: Theme name for filename
             page_number: Page number for filename
             wireframe_path: Optional path to wireframe image for layout enforcement
-            reference_images: Optional list of reference image paths for style guidance
+            reference_images: Optional list of reference image paths (style refs,
+                structure examples) sent as ordered multimodal parts
             negative_dna: Optional negative prompt text (exclusion list)
+            aspect_ratio: Optional aspect ratio string (e.g. "1:1", "2:1"); default 1:1
+            image_size: Optional "1K"/"2K"/"4K" override (gemini-3-pro-image only)
         """
         logger.info(f"Generating image for prompt: {prompt[:50]}...")
 
@@ -93,141 +98,105 @@ class AgentCharlie:
         safe_theme = "".join(x for x in theme if x.isalnum() or x in " _-").strip().replace(" ", "_")
 
         try:
-            if config.DEPLOYMENT_TIER == "PAID":
-                # PAID Tier: Imagen 4.0 (:predict endpoint)
-                # NOTE: Imagen 4.0 does not support image input; use enhanced text prompt instead.
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEN_MODEL_ID}:predict"
-                headers = {
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': self.api_key
-                }
-
-                # When a wireframe is provided, prepend a layout enforcement instruction.
-                enhanced_prompt = prompt
-                if wireframe_path and os.path.exists(wireframe_path):
-                    logger.warning("PAID Tier: Imagen 4.0 does not support image input. Injecting layout enforcement into text prompt.")
-                    enhanced_prompt = (
-                        f"CRITICAL INSTRUCTION: Follow the structural layout EXACTLY as described. "
-                        f"This is a wireframe-guided generation. Maintain precise zone positioning. "
-                        f"{prompt}"
-                    )
-
-                # v5.22 Payload Protocol
-                parameters = {
-                    "sampleCount": 1,
-                    "aspectRatio": "1:1"
-                }
-                if negative_dna:
-                    parameters["negativePrompt"] = negative_dna
-
-                payload = {
-                    "instances": [
-                        { "prompt": enhanced_prompt }
-                    ],
-                    "parameters": parameters
-                }
-
-                response = self._post_with_backoff(url, headers, payload)
-                result = response.json()
-
-                # Parse Imagen Response
-                # Expected: {'predictions': [{'bytesBase64Encoded': '...', 'mimeType': 'image/png'}]}
-                if 'predictions' in result and len(result['predictions']) > 0:
-                    b64_data = result['predictions'][0]['bytesBase64Encoded']
-                    img_data = base64.b64decode(b64_data)
-
-                    filename = f"temp/{safe_theme}_Page{page_number}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-                    with open(filename, "wb") as f:
-                        f.write(img_data)
-                    logger.info(f"Image saved to {filename}")
-                    return filename
-                else:
-                    raise ValueError(f"Invalid response from Imagen API: {result}")
-
+            # Single :generateContent multimodal path for BOTH quality modes
+            # (gemini-2.5-flash-image drafts / gemini-3-pro-image finals), so
+            # reference images always reach the image model. The old Imagen
+            # :predict branch dropped them 100% of the time.
+            model_id = config.GEN_MODEL_ID
+            if model_id.startswith("models/"):
+                url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent"
             else:
-                # FREE Tier: Gemini Flash (:generateContent endpoint)
-                # Gemini Flash supports multimodal input (text + images).
-                # Handle 'models/' prefix if present in config
-                model_id = config.GEN_MODEL_ID
-                if model_id.startswith("models/"):
-                    url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent"
-                else:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
 
-                headers = {
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': self.api_key
-                }
+            headers = {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': self.api_key
+            }
 
-                # Build multimodal parts list; add wireframe and reference images if provided.
-                parts = []
+            # Ordered, role-labeled multimodal parts. Image order and the index
+            # references inside the prompt must stay in sync:
+            #   Image 1 = style reference(s), Image N = wireframe (if present).
+            parts = []
+            image_roles = []
 
-                # Prepend negative DNA as explicit exclusion instruction
-                if negative_dna:
-                    parts.append({"text": f"IMPORTANT: Do NOT include any of the following in the generated image: {negative_dna}"})
+            if reference_images:
+                for ref_path in reference_images:
+                    if not os.path.exists(ref_path):
+                        logger.warning(f"Reference image missing, skipped: {ref_path}")
+                        continue
+                    ref_b64 = self._encode_image_to_base64(ref_path)
+                    if ref_b64:
+                        idx = len(image_roles) + 1
+                        role = ("STRUCTURE EXAMPLE (layering & density guide)"
+                                if "_structure" in ref_path
+                                else "STYLE REFERENCE (match this visual DNA: line weight, corner rounding, composition)")
+                        parts.append({"text": f"Image {idx} — {role}:"})
+                        parts.append({"inline_data": {"mime_type": "image/png", "data": ref_b64}})
+                        image_roles.append(role)
 
-                parts.append({"text": prompt})
+            if wireframe_path and os.path.exists(wireframe_path):
+                wireframe_b64 = self._encode_image_to_base64(wireframe_path)
+                if wireframe_b64:
+                    idx = len(image_roles) + 1
+                    parts.append({"text": (
+                        f"Image {idx} — LAYOUT WIREFRAME: follow its zone geometry EXACTLY, "
+                        "but do NOT draw its colored guide lines or text labels."
+                    )})
+                    parts.append({"inline_data": {"mime_type": "image/png", "data": wireframe_b64}})
+                    image_roles.append("WIREFRAME")
 
-                if wireframe_path and os.path.exists(wireframe_path):
-                    wireframe_b64 = self._encode_image_to_base64(wireframe_path)
-                    if wireframe_b64:
-                        parts.insert(0, {
-                            "inline_data": {
-                                "mime_type": "image/png",
-                                "data": wireframe_b64
-                            }
-                        })
-                        parts.insert(0, {
-                            "text": "WIREFRAME REFERENCE (Follow this layout structure EXACTLY):"
-                        })
+            # Operative instruction goes LAST so it is the freshest context
+            instruction = prompt
+            if negative_dna:
+                instruction += f"\n\nSTRICTLY EXCLUDE from the image: {negative_dna}"
+            if image_roles:
+                instruction += (
+                    f"\n\nYou were given {len(image_roles)} reference image(s) above. "
+                    "Match their art style and follow the wireframe layout precisely."
+                )
+            parts.append({"text": instruction})
 
-                if reference_images:
-                    for ref_path in reference_images:
-                        if os.path.exists(ref_path):
-                            ref_b64 = self._encode_image_to_base64(ref_path)
-                            if ref_b64:
-                                parts.insert(0, {
-                                    "inline_data": {
-                                        "mime_type": "image/png",
-                                        "data": ref_b64
-                                    }
-                                })
-                                parts.insert(0, {
-                                    "text": "STYLE REFERENCE (Match this visual DNA):"
-                                })
+            generation_config = {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {"aspectRatio": aspect_ratio or "1:1"}
+            }
+            # imageSize ("1K"/"2K"/"4K") is only supported on gemini-3-pro-image
+            size = image_size or config.IMAGE_SIZE
+            if size and model_id.startswith("gemini-3"):
+                generation_config["imageConfig"]["imageSize"] = size
 
-                payload = {
-                    "contents": [{
-                        "parts": parts
-                    }],
-                    "generationConfig": {
-                        "responseModalities": ["TEXT", "IMAGE"]
-                    }
-                }
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": generation_config
+            }
 
-                response = self._post_with_backoff(url, headers, payload)
-                result = response.json()
+            logger.info(f"Payload: {len(image_roles)} image part(s) "
+                        f"[{', '.join(r.split(' ')[0] for r in image_roles) or 'none'}], "
+                        f"aspect={generation_config['imageConfig'].get('aspectRatio')}, "
+                        f"size={generation_config['imageConfig'].get('imageSize', 'default')}")
 
-                # Parse Gemini Response
-                # Look for inline data in candidates
-                if 'candidates' in result and result['candidates']:
-                    for candidate in result['candidates']:
-                        if 'content' in candidate and 'parts' in candidate['content']:
-                            for part in candidate['content']['parts']:
-                                if 'inlineData' in part:
-                                    b64_data = part['inlineData']['data']
-                                    img_data = base64.b64decode(b64_data)
+            response = self._post_with_backoff(url, headers, payload)
+            result = response.json()
 
-                                    filename = f"temp/{safe_theme}_Page{page_number}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-                                    with open(filename, "wb") as f:
-                                        f.write(img_data)
-                                    logger.info(f"Image saved to {filename}")
-                                    return filename
+            # Parse Gemini response — first inline image part wins
+            if 'candidates' in result and result['candidates']:
+                for candidate in result['candidates']:
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        for part in candidate['content']['parts']:
+                            if 'inlineData' in part:
+                                b64_data = part['inlineData']['data']
+                                img_data = base64.b64decode(b64_data)
 
-                raise ValueError(f"No image found in Gemini Flash response: {result}")
+                                filename = f"temp/{safe_theme}_Page{page_number}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+                                with open(filename, "wb") as f:
+                                    f.write(img_data)
+                                logger.info(f"Image saved to {filename}")
+                                return filename
+
+            raise ValueError(f"No image found in Gemini response: {result}")
 
         except Exception as e:
             logger.error(f"Image generation failed: {e}")
             if 'response' in locals() and hasattr(response, 'text'):
-                logger.error(f"API Response: {response.text}")
+                logger.error(f"API Response: {response.text[:2000]}")
             raise e

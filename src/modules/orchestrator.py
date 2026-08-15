@@ -58,22 +58,24 @@ class AgentOmega:
             prompt_data = self.bravo.generate_prompts(theme)
             prompts = prompt_data['prompts']
             
-            # Generate Cover using the SAME context (4-tuple)
-            cover_prompt, cover_wf, cover_refs, cover_neg = self.bravo.generate_cover(
+            # Generate Cover using the SAME context. Front and back are two
+            # separate square generations; Agent Echo composites the KDP spread
+            # (back + spine + front) and draws title/subtitle/logo in real fonts.
+            cover_data = self.bravo.generate_cover(
                 theme,
                 prompt_data['main_character'],
                 prompt_data['gear_objects']
             )
-
-            # Insert Cover at the beginning
-            prompts.insert(0, {
-                "type": "cover",
-                "page_number": 1,
-                "prompt": cover_prompt,
-                "wireframe_path": cover_wf,
-                "reference_images": cover_refs,
-                "negative_dna": cover_neg
-            })
+            for side in ("back", "front"):
+                c_prompt, c_wf, c_refs, c_neg = cover_data[side]
+                prompts.insert(0, {
+                    "type": f"cover_{side}",
+                    "page_number": 1,
+                    "prompt": c_prompt,
+                    "wireframe_path": c_wf,
+                    "reference_images": c_refs,
+                    "negative_dna": c_neg
+                })
             
             generated_pages = []  # [{"path","page_type","page_number"}] — assembler's single source of truth
             preview_images = {} # Store paths by type for preview
@@ -100,24 +102,28 @@ class AgentOmega:
                     await progress_callback(f"⚙️ Phase: Agent Charlie & Delta\n📊 Progress: {i}/{total_steps}\n📝 Status: Generating {p['type']} image...")
 
                 logger.info(f"Processing Image {i+1}/{len(prompts)} ({p['type']})...")
-                
+
                 # Generate
                 # Use actual page number for naming
+                is_cover = p['type'].startswith('cover')
                 pg_num = p.get('page_number', i+1)
                 page_num_str = str(pg_num).zfill(2)
-                if p['type'] == 'cover':
-                    page_num_str = "Cover"
-                
+                if is_cover:
+                    page_num_str = "CoverFront" if p['type'] == "cover_front" else "CoverBack"
+
                 # Resolve wireframe + reference image paths + negative DNA for multimodal input
                 wireframe_path = p.get('wireframe_path')
                 reference_images = p.get('reference_images')
                 negative_dna = p.get('negative_dna')
+                image_size = config.COVER_IMAGE_SIZE if is_cover else config.IMAGE_SIZE
 
                 image_path = self.charlie.generate_image(
                     p['prompt'], theme, page_num_str,
                     wireframe_path=wireframe_path,
                     reference_images=reference_images,
-                    negative_dna=negative_dna
+                    negative_dna=negative_dna,
+                    aspect_ratio="1:1",
+                    image_size=image_size
                 )
 
                 # QA Check (Retry Loop) — pass first reference image for comparison.
@@ -127,7 +133,10 @@ class AgentOmega:
                 passed = False
                 retries = 0
                 while not passed and retries < 3:
-                    passed, qa_reasons = self.delta.quality_check(image_path, reference_image_path=qa_ref)
+                    passed, qa_reasons = self.delta.quality_check(
+                        image_path, reference_image_path=qa_ref,
+                        is_color_page=is_cover
+                    )
                     if not passed:
                         logger.warning(f"Image {i+1} failed QA ({qa_reasons}). Retrying ({retries+1}/3)...")
                         retries += 1
@@ -142,7 +151,9 @@ class AgentOmega:
                             retry_prompt, theme, page_num_str,
                             wireframe_path=wireframe_path,
                             reference_images=reference_images,
-                            negative_dna=negative_dna
+                            negative_dna=negative_dna,
+                            aspect_ratio="1:1",
+                            image_size=image_size
                         )
 
                 if passed:
@@ -162,7 +173,11 @@ class AgentOmega:
                     await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_pages)}/{total_steps}\n📝 Status: Assembling PDF...")
 
                 logger.info("Agent Echo: Assembling PDF...")
-                pdf_path = self.echo.assemble_pdf(generated_pages)
+                cover_text = {
+                    "title": "KNOLLING ADVENTURES",
+                    "subtitle": f"{theme.title()} Edition",
+                }
+                pdf_path = self.echo.assemble_pdf(generated_pages, cover_text=cover_text)
                 
                 # 5. Finish
                 # In real app, upload to Drive and get link

@@ -53,8 +53,11 @@ async def run_test():
         "main_character": "Hero",
         "gear_objects": "Gear"
     })
-    # generate_cover returns a 4-tuple since a2bfced
-    omega.bravo.generate_cover = MagicMock(return_value=("cover_prompt", None, [], "neg"))
+    # generate_cover returns front/back 4-tuples (composited spread architecture)
+    omega.bravo.generate_cover = MagicMock(return_value={
+        "front": ("front_prompt", None, [], "neg"),
+        "back": ("back_prompt", None, [], "neg"),
+    })
 
     # Mock Agent Delta (QA) — returns (passed, reasons) tuple
     omega.delta.quality_check = MagicMock(return_value=(True, []))
@@ -75,52 +78,31 @@ async def run_test():
     logger.info("Job Finished. Verifying results...")
     
     # Check generated images
-    # We expect 2 images: Cover (Page 1) and Certificate (Page 50)
-    # Based on my code changes:
-    # Cover -> page_number=1 -> "Cover" (handled in orchestrator) -> "temp/test_Cover.png"
-    # Cert -> page_number=50 -> "50" -> "temp/test_50.png"
-    
-    expected_calls = [
-        ("temp/test_Cover.png", "Cover"),
-        ("temp/test_50.png", "50")
-    ]
-    
-    # Check actual calls to generate_image
-    # call_args_list is a list of calls. Each call is (args, kwargs).
-    # args: (prompt, theme, page_num_str)
-    
+    # TARGET_PAGES=1,50 → cover front + cover back (both page_number 1) + certificate
     calls = omega.charlie.generate_image.call_args_list
     logger.info(f"Agent Charlie called {len(calls)} times.")
-    
-    if len(calls) != 2:
-        logger.error(f"FAILED: Expected 2 calls, got {len(calls)}")
+
+    page_nums = [call[0][2] for call in calls]
+    expected = ["CoverFront", "CoverBack", "50"]
+    if page_nums != expected:
+        logger.error(f"FAILED: Expected page ids {expected}, got {page_nums}")
         for i, call in enumerate(calls):
             logger.error(f"Call {i}: {call}")
         sys.exit(1)
-        
-    # Verify Call 1 (Cover)
-    args1, _ = calls[0]
-    # args1[2] is page_num_str
-    if args1[2] != "Cover":
-         logger.error(f"FAILED: Call 1 expected page_num='Cover', got '{args1[2]}'")
-         sys.exit(1)
-         
-    # Verify Call 2 (Certificate)
-    args2, _ = calls[1]
-    if args2[2] != "50":
-         logger.error(f"FAILED: Call 2 expected page_num='50', got '{args2[2]}'")
-         sys.exit(1)
 
     # Verify the assembler received explicit page metadata (not bare paths)
-    (assemble_args, _) = omega.echo.assemble_pdf.call_args
+    (assemble_args, assemble_kwargs) = omega.echo.assemble_pdf.call_args
     pages = assemble_args[0]
     assert all(isinstance(pg, dict) for pg in pages), f"Expected page dicts, got: {pages}"
     types = {pg["page_type"] for pg in pages}
-    if types != {"cover", "certificate"}:
-        logger.error(f"FAILED: Expected page types cover+certificate, got {types}")
+    if types != {"cover_front", "cover_back", "certificate"}:
+        logger.error(f"FAILED: Expected cover_front+cover_back+certificate, got {types}")
+        sys.exit(1)
+    if "cover_text" not in assemble_kwargs:
+        logger.error("FAILED: assemble_pdf not given cover_text")
         sys.exit(1)
 
-    logger.info("SUCCESS: Verified Cover and Page 50 were generated.")
+    logger.info("SUCCESS: Verified Cover (front+back) and Page 50 were generated.")
 
 if __name__ == "__main__":
     asyncio.run(run_test())

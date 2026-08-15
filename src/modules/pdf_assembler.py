@@ -25,9 +25,12 @@ class AgentEcho:
         # Total Size: 8.75" x 8.75"
         self.width = 8.75 * inch
         self.height = 8.75 * inch
-        # Cover Spread: 17.365" x 8.75" (Back + Spine + Front + Bleeds)
-        self.cover_width = 17.365 * inch
-        self.cover_height = 8.75 * inch
+        # Cover Spread: Back + Spine + Front + Bleeds — spine width depends on
+        # PAGE_COUNT, so the spread is computed, not hardcoded (17.365" was only
+        # correct for exactly 50 pages).
+        cover_w_in, cover_h_in = config.get_cover_spread_size()
+        self.cover_width = cover_w_in * inch
+        self.cover_height = cover_h_in * inch
         self._register_fonts()
         
         # Debug mode: Use magenta text for visibility testing
@@ -254,7 +257,96 @@ class AgentEcho:
     # Page types that receive a programmatic text overlay (Bible §1.6)
     TEXT_OVERLAY_TYPES = {"mission", "parents", "intro", "knolling", "certificate"}
 
-    def assemble_pdf(self, pages):
+    COMPOSE_DPI = 300  # KDP minimum print resolution
+
+    def _compose_cover_spread(self, front_path=None, back_path=None):
+        """
+        Composites the full KDP cover spread (back panel | spine | front panel)
+        from two square art generations at 300 DPI. The KDP barcode zone
+        (2.0" x 1.2", bottom-right of the back panel) is cleared to white.
+        Returns the path of the composed PNG.
+        """
+        dpi = self.COMPOSE_DPI
+        w_in, h_in = config.get_cover_spread_size()
+        W, H = int(round(w_in * dpi)), int(round(h_in * dpi))
+        panel_w = int(round((config.TRIM_WIDTH + config.BLEED_SIZE) * dpi))
+
+        canvas_img = Image.new("RGB", (W, H), "white")
+
+        def paste_panel(art_path, x0):
+            if not art_path or not os.path.exists(art_path):
+                return
+            with Image.open(art_path) as art:
+                art = art.convert("RGB")
+                # cover-fit into the panel (center-crop the overflow)
+                target_ratio = panel_w / H
+                aw, ah = art.size
+                if aw / ah > target_ratio:
+                    crop_w = int(ah * target_ratio)
+                    x = (aw - crop_w) // 2
+                    art = art.crop((x, 0, x + crop_w, ah))
+                else:
+                    crop_h = int(aw / target_ratio)
+                    y = (ah - crop_h) // 2
+                    art = art.crop((0, y, aw, y + crop_h))
+                art = art.resize((panel_w, H), Image.LANCZOS)
+                canvas_img.paste(art, (x0, 0))
+
+        paste_panel(back_path, 0)                 # back panel: left
+        paste_panel(front_path, W - panel_w)      # front panel: right
+        # spine stays white (spine text disallowed under 79 pages)
+
+        # Clear the KDP barcode restricted area (Bible Zone 7): 2.0" x 1.2" at
+        # the bottom-right of the BACK panel (KDP prints its barcode there)
+        bc_w, bc_h = int(2.0 * dpi), int(1.2 * dpi)
+        margin = int((config.BLEED_SIZE + 0.25) * dpi)
+        x1 = panel_w - margin - bc_w
+        y1 = H - margin - bc_h
+        canvas_img.paste((255, 255, 255), (x1, y1, x1 + bc_w, y1 + bc_h))
+
+        out_path = f"temp/cover_spread_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+        canvas_img.save(out_path)
+        logger.info(f"✅ Cover spread composed: {out_path} ({W}x{H}px @ {dpi} DPI)")
+        return out_path
+
+    def _draw_cover_text(self, c, cover_text):
+        """
+        Draws title/subtitle on the FRONT panel and the series logo (Zone 8,
+        1.2" tall per Bible) in real fonts. Typography is never AI-rendered.
+        """
+        title = cover_text.get("title", "KNOLLING ADVENTURES")
+        subtitle = cover_text.get("subtitle", "")
+
+        # Front panel geometry (right side of the spread)
+        panel_w = (config.TRIM_WIDTH + config.BLEED_SIZE) * inch
+        front_cx = self.cover_width - (config.BLEED_SIZE + config.TRIM_WIDTH / 2) * inch
+        safe_top = self.cover_height - (config.BLEED_SIZE + config.SAFE_MARGIN) * inch
+
+        c.setFillColor(black)
+        c.setFont("TitanOne", 64)
+        c.drawCentredString(front_cx, safe_top - 0.9 * inch, title)
+        if subtitle:
+            c.setFont("FredokaOne", 32)
+            c.drawCentredString(front_cx, safe_top - 1.6 * inch, subtitle)
+
+        # Logo: Zone 8, height exactly 1.2" (Bible), bottom-center of front panel
+        logo_path = "assets/logo.png"
+        if os.path.exists(logo_path):
+            with Image.open(logo_path) as logo:
+                lw, lh = logo.size
+            logo_h = 1.2 * inch
+            logo_w = logo_h * (lw / lh)
+            c.drawImage(
+                logo_path,
+                front_cx - logo_w / 2,
+                (config.BLEED_SIZE + config.SAFE_MARGIN) * inch,
+                width=logo_w, height=logo_h,
+                mask='auto'
+            )
+        else:
+            logger.warning("assets/logo.png not found — cover logo skipped")
+
+    def assemble_pdf(self, pages, cover_text=None):
         """
         Assembles the PDF from generated pages.
 
@@ -262,6 +354,10 @@ class AgentEcho:
             pages: list of dicts with explicit metadata (single source of truth is
                    the orchestrator's prompt data — NO filename sniffing):
                    {"path": str, "page_type": str, "page_number": int}
+                   Cover art arrives as page_type "cover_front"/"cover_back"
+                   (composited into one spread) or legacy "cover" (pre-made spread).
+            cover_text: optional {"title": ..., "subtitle": ...} drawn on the
+                   front panel in real fonts.
 
         Returns the path to the generated PDF. Raises on assembly failure —
         a silent None return previously masked total failures.
@@ -272,12 +368,38 @@ class AgentEcho:
         output_filename = f"temp/Knolling_Adventure_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
         logger.info(f"📄 Assembling PDF: {output_filename}")
 
-        # Interior pages in reading order, cover first if present
-        ordered = sorted(pages, key=lambda p: (p.get("page_type") != "cover", p.get("page_number", 0)))
+        cover_front = next((p for p in pages if p.get("page_type") == "cover_front"), None)
+        cover_back = next((p for p in pages if p.get("page_type") == "cover_back"), None)
+        legacy_cover = next((p for p in pages if p.get("page_type") == "cover"), None)
+        interiors = sorted(
+            (p for p in pages if p.get("page_type") not in ("cover", "cover_front", "cover_back")),
+            key=lambda p: p.get("page_number", 0)
+        )
 
         c = canvas.Canvas(output_filename, pagesize=(self.width, self.height))
 
-        for page in ordered:
+        # ── Cover spread first ──
+        if cover_front or cover_back:
+            spread_path = self._compose_cover_spread(
+                front_path=cover_front["path"] if cover_front else None,
+                back_path=cover_back["path"] if cover_back else None,
+            )
+            c.setPageSize((self.cover_width, self.cover_height))
+            c.drawImage(spread_path, 0, 0, width=self.cover_width, height=self.cover_height)
+            self._draw_cover_text(c, cover_text or {})
+            c.showPage()
+            os.remove(spread_path)
+            logger.info("  ✅ Cover spread page complete")
+        elif legacy_cover:
+            c.setPageSize((self.cover_width, self.cover_height))
+            drawn = self._draw_image_fitted(c, legacy_cover["path"], self.cover_width, self.cover_height)
+            self._draw_cover_text(c, cover_text or {})
+            c.showPage()
+            if drawn != legacy_cover["path"] and os.path.exists(drawn):
+                os.remove(drawn)
+
+        # ── Interior pages in reading order ──
+        for page in interiors:
             img_path = page["path"]
             page_type = page.get("page_type", "unknown")
 
@@ -286,15 +408,11 @@ class AgentEcho:
 
             logger.info(f"\n📄 Processing: {img_path} (type={page_type}, page={page.get('page_number')})")
 
-            # Color masking / grayscale applies to interiors only — covers stay full color
-            if page_type == "cover":
-                processed_img_path = img_path
-                page_w, page_h = self.cover_width, self.cover_height
-            else:
-                processed_img_path = self.apply_color_masking(img_path)
-                if not processed_img_path:
-                    raise RuntimeError(f"Color masking failed for {img_path}")
-                page_w, page_h = self.width, self.height
+            # Color masking / grayscale applies to interiors only
+            processed_img_path = self.apply_color_masking(img_path)
+            if not processed_img_path:
+                raise RuntimeError(f"Color masking failed for {img_path}")
+            page_w, page_h = self.width, self.height
 
             # Layer 1: image (background), aspect-preserving
             c.setPageSize((page_w, page_h))

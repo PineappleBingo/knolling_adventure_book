@@ -3,11 +3,14 @@ Agent Bravo: Executive Creative Director (Prompt Logic)
 Mission: Ensure the "Director" logic strictly adheres to the visual style guidelines.
 """
 
+import json
 import logging
+import re
 import time
 import glob
 import os
 from google import genai
+from google.genai import types as genai_types
 from PIL import Image
 from src import config
 
@@ -102,25 +105,64 @@ class AgentBravo:
         logger.info(f"Sleeping for {config.PROMPT_GEN_DELAY}s (Rate Limit)...")
         time.sleep(config.PROMPT_GEN_DELAY)
 
-    def _call_with_backoff(self, model, contents):
-        """Calls Gemini API with exponential backoff on 503 errors."""
+    def _call_with_backoff(self, model, contents, gen_config=None):
+        """Calls Gemini API with exponential backoff on transient errors (503/429)."""
         for attempt in range(MAX_RETRIES):
             try:
                 self._rate_limit()
-                response = self.genai_client.models.generate_content(
-                    model=model,
-                    contents=contents
-                )
+                kwargs = {"model": model, "contents": contents}
+                if gen_config is not None:
+                    kwargs["config"] = gen_config
+                response = self.genai_client.models.generate_content(**kwargs)
                 return response
             except Exception as e:
                 error_str = str(e)
-                if "503" in error_str or "UNAVAILABLE" in error_str:
+                transient = any(t in error_str for t in
+                                ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"))
+                if transient and attempt < MAX_RETRIES - 1:
                     wait = BACKOFF_BASE * (2 ** attempt)
-                    logger.warning(f"503 UNAVAILABLE (attempt {attempt+1}/{MAX_RETRIES}). Retrying in {wait}s...")
+                    logger.warning(f"Transient API error (attempt {attempt+1}/{MAX_RETRIES}). Retrying in {wait}s...")
                     time.sleep(wait)
                 else:
                     raise
         raise Exception(f"API still unavailable after {MAX_RETRIES} retries")
+
+    def _get_theme_content(self, theme):
+        """
+        One structured LLM call for theme-specific CONTENT (never visual style):
+        main character description + gear list. Replaces the hardcoded
+        firefighter gear that shipped with every theme.
+        """
+        defaults = {
+            "main_character": f"Heroic {theme} character, chunky toy-like proportions",
+            "gear": ["Helmet", "Gloves", "Boots", "Tool Belt", "Backpack"],
+        }
+        if not self.genai_client:
+            return defaults
+
+        prompt = (
+            f'Theme: "{theme}" (children\'s coloring book, ages 4-8).\n'
+            'Return JSON: {"main_character": "<one-line hero description>", '
+            '"gear": ["<5 distinct, theme-authentic tools/equipment items>"]}.\n'
+            "Items must be instantly recognizable, simple shapes, kid-safe."
+        )
+        try:
+            response = self._call_with_backoff(
+                self.vision_model_name, [prompt],
+                gen_config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                ),
+            )
+            fenced = re.search(r"\{.*\}", response.text, re.DOTALL)
+            data = json.loads(fenced.group(0) if fenced else response.text)
+            if data.get("main_character") and isinstance(data.get("gear"), list) and data["gear"]:
+                return {
+                    "main_character": str(data["main_character"]),
+                    "gear": [str(g) for g in data["gear"]][:5],
+                }
+        except Exception as e:
+            logger.warning(f"Theme content call failed ({e}); using defaults.")
+        return defaults
 
     def analyze_assets(self):
         """
@@ -245,8 +287,13 @@ class AgentBravo:
     def _generate_smart_prompt(self, page_type, theme, specific_context,
                                subject="", object_list="", main_character=""):
         """
-        Generates a smart prompt using Bible Template + Wireframe + Structure + DNA.
+        Builds the final image prompt DETERMINISTICALLY from the Bible templates.
         Returns 4-tuple: (prompt, wireframe_path, reference_images, negative_dna).
+
+        Single round-trip architecture: the raw reference images (style ref +
+        structure example + wireframe) travel to the IMAGE model as pixels via
+        Agent Charlie. The old flow paraphrased them into text twice through
+        Gemini Vision before generation — visual DNA does not survive that.
         """
         # Asset Mapping
         asset_map = {
@@ -260,39 +307,36 @@ class AgentBravo:
         }
 
         asset_key = asset_map.get(page_type, page_type)
-        logger.info(f"Generating Smart Prompt for {page_type} (Asset Key: {asset_key})...")
+        logger.info(f"Building deterministic prompt for {page_type} (Asset Key: {asset_key})...")
 
-        # 1. Load Wireframe (Geometry)
+        # 1. Resolve reference assets (style ref first, then structure example —
+        #    Charlie labels them by role in that order; wireframe rides separately)
         wireframe_path = f"assets/ref_{asset_key}_layout_wireframe_kdp.png"
-        wireframe_img = None
-        if os.path.exists(wireframe_path):
-            wireframe_img = Image.open(wireframe_path)
-        else:
+        if not os.path.exists(wireframe_path):
             logger.warning(f"Wireframe not found for {asset_key}: {wireframe_path}")
+            wireframe_path = None
 
-        # 2. Load Structure Example (Context)
+        reference_images = []
+        style_ref_path = f"assets/ref_{asset_key}_01.png"
+        if os.path.exists(style_ref_path):
+            reference_images.append(style_ref_path)
+        else:
+            logger.warning(f"Style reference not found for {asset_key}: {style_ref_path}")
         structure_path = f"assets/ref_{asset_key}_structure_example.png"
-        structure_img = None
         if os.path.exists(structure_path):
-            structure_img = Image.open(structure_path)
+            reference_images.append(structure_path)
         else:
             logger.warning(f"Structure example not found for {asset_key}: {structure_path}")
 
-        # 3. Get Dynamic DNA (supplementary nuance from reference analysis)
-        dna_key = f"dna_{asset_key}"
-        dynamic_dna = self.style_library.get(dna_key, self.style_library.get("dna_cover", "black and white line art"))
-
-        # 4. Get Fixed DNA + Tech Envelope from Bible
+        # 2. Fixed DNA + Tech Envelope + Bible template (deterministic)
         fixed_dna = DNA_MACROS.get(page_type, "black and white line art")
         tech_envelope = TECH_ENVELOPE_COVER if page_type == "cover" else TECH_ENVELOPE_INTERNAL
-
-        # 5. Build Bible prompt template with variable substitution
         bible_prompt = self._build_bible_prompt(
             page_type, theme, subject=subject,
             object_list=object_list, main_character=main_character
         )
 
-        # 6. Build Negative DNA (separate from prompt — NOT appended with --negative_prompt)
+        # 3. Negative DNA (separate field — never appended as '--negative_prompt')
         negative_dna = self.NEGATIVE_GLOBAL
         if page_type == "knolling":
             negative_dna += f", {self.NEGATIVE_KNOLLING}"
@@ -301,7 +345,7 @@ class AgentBravo:
         elif page_type == "cover":
             negative_dna += f", {self.NEGATIVE_COVER}"
 
-        # 7. Color instruction
+        # 4. Color instruction
         if page_type != "cover":
             color_instruction = (
                 "CRITICAL: The Wireframe contains COLORED ZONES (Red/Green/Blue) for reference only. "
@@ -312,90 +356,71 @@ class AgentBravo:
         else:
             color_instruction = "Follow the Wireframe zones for placement. Output full color for the Cover."
 
-        # 8. Construct Meta-Prompt with Bible anchors
-        meta_prompt = (
-            "Act as an Expert Art Director. Construct a highly detailed image generation prompt.\n\n"
-            f"TECHNICAL ENVELOPE:\n{tech_envelope}\n\n"
-            f"THEME: {theme}\n\n"
-            f"FIXED STYLE DNA (MUST follow exactly):\n{fixed_dna}\n\n"
-            f"BIBLE PROMPT TEMPLATE:\n{bible_prompt}\n\n"
-            f"BIBLE SPECIFICATIONS:\n{specific_context}\n\n"
-            f"SUPPLEMENTARY STYLE NUANCE (from reference analysis):\n{dynamic_dna}\n\n"
-            "REFERENCE DOCUMENTS:\n"
-            "1. WIREFRAME IMAGE: Defines STRICT GEOMETRY. Follow zone positions exactly.\n"
-            "2. STRUCTURE EXAMPLE: Defines CONTEXT (layering & density).\n\n"
-            f"{color_instruction}\n\n"
-            "MANDATORY RULES:\n"
-            "- Output must be pure BLACK & WHITE line art (except covers)\n"
-            "- Thick uniform vector lines, no sketching, no grayscale\n"
-            "- No text, no letters, no words in the image\n"
-            "- All art must stay inside the safety zone\n"
-            f"- EXCLUDE from output: {negative_dna}\n\n"
-            "Output ONLY the raw prompt string, no markdown."
-        )
+        # 5. Assemble the final prompt — no LLM in the loop
+        sections = [bible_prompt or f"{tech_envelope}. Style: {fixed_dna}. Theme: {theme}."]
+        if specific_context:
+            sections.append(f"PAGE SPECIFICATIONS (Series Master Bible):\n{specific_context}")
+        sections.append(color_instruction)
+        prompt = "\n\n".join(sections)
 
-        # Collect reference image paths to pass through to Charlie for multimodal input
-        ref_img_path = f"assets/ref_{asset_key}_01.png"
-        reference_images = [ref_img_path] if os.path.exists(ref_img_path) else []
-
-        try:
-            inputs = [meta_prompt]
-            if wireframe_img:
-                inputs.append(wireframe_img)
-            if structure_img:
-                inputs.append(structure_img)
-
-            response = self._call_with_backoff(
-                self.vision_model_name,
-                inputs
-            )
-            final_prompt = response.text.strip()
-
-            return final_prompt, wireframe_path if os.path.exists(wireframe_path) else None, reference_images, negative_dna
-
-        except Exception as e:
-            logger.error(f"Failed to generate smart prompt for {page_type}: {e}")
-            # Fallback: use the Bible template directly as the prompt
-            fallback = bible_prompt or (
-                f"{tech_envelope}. Black and white line art coloring book page for children ages 4-8. "
-                f"Pure black outlines on white background, no shading, no color, no gradients. "
-                f"Thick clean vector lines, rounded corners, toy-like proportions. "
-                f"Theme: {specific_context}. Style: {fixed_dna}"
-            )
-            return fallback, wireframe_path if os.path.exists(wireframe_path) else None, reference_images, negative_dna
+        return prompt, wireframe_path, reference_images, negative_dna
 
     def generate_cover(self, theme, main_character, gear_objects):
         """
-        Generates the prompt for the Cover Art using Blueprint + Wireframe + DNA.
-        Returns 4-tuple: (prompt, wireframe_path, reference_images, negative_dna).
-        """
-        # Load Blueprint Text for Cover specifically
-        blueprint_path = "docs/MASTER_COVER_BLUEPRINT_v1.0.md"
-        blueprint_text = ""
-        if os.path.exists(blueprint_path):
-            with open(blueprint_path, "r") as f:
-                blueprint_text = f.read()
+        Generates FRONT and BACK cover art prompts as two separate square (1:1)
+        generations. The full 17.365"x8.75" spread is composited programmatically
+        by Agent Echo (back + spine + front), which also draws title/subtitle/logo
+        in real fonts — no image model can hit the exact ~2:1 spread ratio, and
+        AI-rendered title text is unreliable.
 
-        context = (
-            f"MAIN CHARACTER: {main_character}\n"
-            f"GEAR: {gear_objects}\n"
-            f"BLUEPRINT: {blueprint_text}\n"
-            "Explicitly instruct the generator to leave the 'Black Zone' (Zone 8) empty or reserved for the 'assets/logo.png' overlay."
+        Returns dict: {"front": 4-tuple, "back": 4-tuple} matching
+        (_prompt, wireframe_path, reference_images, negative_dna).
+        """
+        # Shared cover assets (style ref / structure / wireframe)
+        _, wireframe_path, reference_images, negative_dna = \
+            self._generate_smart_prompt("cover", theme, "")
+
+        common_style = (
+            "Flat vector illustration, vibrant colors, thick clean black outlines, "
+            "heroic cute chunky style for ages 4-8, high energy, white background, "
+            "high commercial print quality."
+        )
+        # Art must stay text-free: title/subtitle/logo are composited in ReportLab.
+        no_text = ("Do NOT render any text, letters, words, logos or watermarks — "
+                   "all typography is added later in postproduction.")
+
+        front_prompt = (
+            f"Square front cover artwork for a children's coloring book, theme: {theme}. "
+            f"Hero: {main_character}, full body, dynamic friendly pose, direct eye contact, "
+            f"surrounded by floating {gear_objects}. "
+            "Composition: hero centered in the lower two-thirds; keep the top third "
+            "visually calm (soft background shapes only) as clear space for the title. "
+            f"{common_style} {no_text}"
+        )
+        back_prompt = (
+            f"Square back cover artwork for a children's coloring book, theme: {theme}. "
+            f"Neat knolling flat-lay of {gear_objects} arranged in a grid on the upper half, "
+            "with a small cheerful mini mascot character in the middle area. "
+            "Keep the bottom-right quadrant completely empty white space (reserved area). "
+            f"{common_style} {no_text}"
         )
 
-        return self._generate_smart_prompt("cover", theme, context)
+        return {
+            "front": (front_prompt, wireframe_path, reference_images, negative_dna),
+            "back": (back_prompt, wireframe_path, reference_images, negative_dna),
+        }
 
     def generate_prompts(self, theme):
         """
-        Generates all interior prompts using Bible Templates + Multi-Shot DNA + Smart Prompt Logic.
+        Generates all interior prompts deterministically from Bible templates.
         Each prompt dict includes negative_dna as a separate field.
+        (analyze_assets() is no longer in the loop: raw reference images now go
+        to the image model directly, so an LLM paraphrase of them adds nothing.)
         """
-        # 1. Analyze Assets first
-        self.analyze_assets()
-
-        # Define Context
-        items = ["Helmet", "Hose", "Ladder", "Axe", "Boots"]
-        main_character = f"Heroic {theme}"
+        # Theme-specific content (character + gear) via one structured LLM call
+        theme_content = self._get_theme_content(theme)
+        items = theme_content["gear"]
+        main_character = theme_content["main_character"]
         gear_objects = ", ".join(items)
 
         prompts = []

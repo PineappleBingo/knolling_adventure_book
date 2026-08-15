@@ -51,28 +51,32 @@ class TestSmartPrompts(unittest.TestCase):
         print("\nTesting 'No Color' Instruction Injection...")
         
         with patch('os.path.exists', return_value=True):
-            with patch('PIL.Image.open'):
-                # Generate a prompt for a non-cover page
-                self.bravo._generate_smart_prompt("knolling", "Test", "Context")
+            # Prompts are now built deterministically — assert on the returned string
+            prompt, wf, refs, neg = self.bravo._generate_smart_prompt("knolling", "Test", "Context")
 
-                # _call_with_backoff(model_name, contents) — contents[0] is the meta-prompt
-                call_args = self.bravo._call_with_backoff.call_args
-                meta_prompt = call_args[0][1][0]
+            self.assertIn("CRITICAL: The Wireframe contains COLORED ZONES", prompt)
+            self.assertIn("pure BLACK & WHITE line art", prompt)
+            # Style ref + structure example both flow to the image model
+            self.assertEqual(refs, ["assets/ref_page4_01.png",
+                                    "assets/ref_page4_structure_example.png"])
+            self.assertEqual(wf, "assets/ref_page4_layout_wireframe_kdp.png")
+            self.assertIn(self.bravo.NEGATIVE_KNOLLING.split(",")[0], neg)
 
-                self.assertIn("CRITICAL: The Wireframe contains COLORED ZONES", meta_prompt)
-                self.assertIn("pure BLACK & WHITE line art", meta_prompt)
+            print("Verified 'No Color' instruction for interior page.")
 
-                print("Verified 'No Color' instruction for interior page.")
+            # Test Cover (should NOT have the B/W restriction)
+            prompt, wf, refs, neg = self.bravo._generate_smart_prompt("cover", "Test", "Context")
 
-                # Test Cover (should NOT have the restriction)
-                self.bravo._generate_smart_prompt("cover", "Test", "Context")
-                call_args = self.bravo._call_with_backoff.call_args
-                meta_prompt = call_args[0][1][0]
+            self.assertNotIn("The final output must be pure BLACK & WHITE line art", prompt)
+            self.assertIn("Output full color", prompt)
 
-                self.assertNotIn("The final output must be pure BLACK & WHITE line art", meta_prompt)
-                self.assertIn("Output full color", meta_prompt)
+            print("Verified 'Full Color' instruction for cover.")
 
-                print("Verified 'Full Color' instruction for cover.")
+    def test_deterministic_no_llm_in_prompt_loop(self):
+        """The prompt build must not round-trip through the text LLM anymore."""
+        with patch('os.path.exists', return_value=True):
+            self.bravo._generate_smart_prompt("action", "Test", "Context")
+        self.bravo._call_with_backoff.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

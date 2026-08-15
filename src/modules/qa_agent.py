@@ -55,10 +55,12 @@ class AgentDelta:
                 return True, []
             return False, [text[:500]]
 
-    def quality_check(self, image_path, reference_image_path=None):
+    def quality_check(self, image_path, reference_image_path=None, is_color_page=False):
         """
         Checks the quality of the generated image using Gemini 2.5 Pro Vision.
         Optionally compares against a reference image for layout/style accuracy.
+        is_color_page=True switches to cover criteria — judging a full-color
+        cover against "must be black & white" guaranteed FAIL loops before.
         Returns (passed: bool, reasons: list[str]) — reasons feed the retry prompt.
         """
         logger.info(f"Performing QA check on {image_path}...")
@@ -75,6 +77,25 @@ class AgentDelta:
 
             img = Image.open(image_path)
 
+            # Criteria depend on page kind: interiors are strict B/W line art,
+            # covers are full-color and judged on color/energy/composition.
+            if is_color_page:
+                criteria = (
+                    "1. Must be vibrant FULL COLOR flat vector illustration (a cover, NOT line art).\n"
+                    "2. Thick clean black outlines, chunky rounded toy-like proportions.\n"
+                    "3. No rendered text, letters, watermarks or logos (typography is added later).\n"
+                    "4. Composition is clean and uncluttered with clear space where requested.\n"
+                    "5. High commercial print quality: no artifacts, no blur, no cut-off subjects.\n"
+                )
+            else:
+                criteria = (
+                    "1. Must be black and white line art ONLY (no color, no grayscale shading).\n"
+                    "2. Lines must be unbroken, thick, and clear.\n"
+                    "3. No distorted text or gibberish text.\n"
+                    "4. Art style must match: chunky, rounded, toy-like proportions.\n"
+                    "5. Must match the requested subject.\n"
+                )
+
             # Build QA prompt — enhanced when reference image is available
             contents = []
 
@@ -88,11 +109,8 @@ class AgentDelta:
                     "Act as a Senior Pre-Press Quality Manager. "
                     "Compare the GENERATED IMAGE against the REFERENCE IMAGE. "
                     "Strict Criteria:\n"
-                    "1. Must be black and white line art ONLY (no color, no grayscale shading).\n"
-                    "2. Lines must be unbroken, thick, and clear.\n"
-                    "3. No distorted text or gibberish text.\n"
-                    "4. Overall layout and composition must be similar to the reference.\n"
-                    "5. Art style must match: chunky, rounded, toy-like proportions.\n"
+                    f"{criteria}"
+                    "6. Overall layout and composition must be similar to the reference.\n"
                     f"{self.VERDICT_INSTRUCTIONS}"
                 )
                 contents.append(prompt)
@@ -102,11 +120,7 @@ class AgentDelta:
                     "Act as a Senior Pre-Press Quality Manager. "
                     "Analyze this image for a children's coloring book. "
                     "Strict Criteria:\n"
-                    "1. Must be black and white line art ONLY.\n"
-                    "2. No grayscale shading or colors.\n"
-                    "3. Lines must be unbroken and clear.\n"
-                    "4. No distorted text or gibberish.\n"
-                    "5. Must match the requested subject.\n"
+                    f"{criteria}"
                     f"{self.VERDICT_INSTRUCTIONS}"
                 )
                 contents.append(prompt)
