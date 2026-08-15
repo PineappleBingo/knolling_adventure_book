@@ -30,10 +30,15 @@ async def run_test():
     
     # 2. Mock Agents
     omega = AgentOmega()
-    
-    # Mock Agent Charlie (Image Generator)
-    omega.charlie.generate_image = MagicMock(side_effect=lambda prompt, theme, page_num: f"temp/test_{page_num}.png")
-    
+
+    # Mock Agent Alpha preflight (test env has no assets/API keys)
+    omega.alpha.assert_ready_for_generation = MagicMock()
+
+    # Mock Agent Charlie (Image Generator) — accepts multimodal kwargs
+    omega.charlie.generate_image = MagicMock(
+        side_effect=lambda prompt, theme, page_num, **kwargs: f"temp/test_{page_num}.png"
+    )
+
     # Mock Agent Bravo (Prompt Generator)
     # We need to return the structure expected by AgentOmega
     omega.bravo.generate_prompts = MagicMock(return_value={
@@ -48,10 +53,11 @@ async def run_test():
         "main_character": "Hero",
         "gear_objects": "Gear"
     })
-    omega.bravo.generate_cover = MagicMock(return_value="cover_prompt")
-    
-    # Mock Agent Delta (QA)
-    omega.delta.quality_check = MagicMock(return_value=True)
+    # generate_cover returns a 4-tuple since a2bfced
+    omega.bravo.generate_cover = MagicMock(return_value=("cover_prompt", None, [], "neg"))
+
+    # Mock Agent Delta (QA) — returns (passed, reasons) tuple
+    omega.delta.quality_check = MagicMock(return_value=(True, []))
     
     # Mock Agent Echo (PDF Assembler)
     omega.echo.assemble_pdf = MagicMock(return_value="temp/test_output.pdf")
@@ -104,6 +110,15 @@ async def run_test():
     if args2[2] != "50":
          logger.error(f"FAILED: Call 2 expected page_num='50', got '{args2[2]}'")
          sys.exit(1)
+
+    # Verify the assembler received explicit page metadata (not bare paths)
+    (assemble_args, _) = omega.echo.assemble_pdf.call_args
+    pages = assemble_args[0]
+    assert all(isinstance(pg, dict) for pg in pages), f"Expected page dicts, got: {pages}"
+    types = {pg["page_type"] for pg in pages}
+    if types != {"cover", "certificate"}:
+        logger.error(f"FAILED: Expected page types cover+certificate, got {types}")
+        sys.exit(1)
 
     logger.info("SUCCESS: Verified Cover and Page 50 were generated.")
 

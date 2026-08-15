@@ -14,6 +14,12 @@ from src import config
 
 logger = logging.getLogger("AgentCharlie")
 
+MAX_RETRIES = 3
+BACKOFF_BASE = 10  # seconds
+# (connect timeout, read timeout) — image generation can legitimately take minutes
+REQUEST_TIMEOUT = (10, 300)
+TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
 class AgentCharlie:
     def __init__(self):
         logger.info("Agent Charlie initialized.")
@@ -22,6 +28,39 @@ class AgentCharlie:
             logger.error("GOOGLE_API_KEY not found.")
         
         logger.info(f"Using Image Model: {config.GEN_MODEL_ID}")
+
+    def _post_with_backoff(self, url, headers, payload):
+        """
+        POSTs with timeouts and exponential backoff on transient failures
+        (429/5xx/timeouts). Honors Retry-After when the server provides it.
+        Previously a single bare requests.post with no timeout could hang or
+        let one transient 429 kill an entire page.
+        """
+        last_err = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.post(url, headers=headers, json=payload,
+                                         timeout=REQUEST_TIMEOUT)
+                if response.status_code in TRANSIENT_STATUS and attempt < MAX_RETRIES:
+                    retry_after = response.headers.get("Retry-After")
+                    wait = int(retry_after) if (retry_after and retry_after.isdigit()) \
+                        else BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(f"HTTP {response.status_code} (attempt {attempt+1}/"
+                                   f"{MAX_RETRIES+1}). Retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                response.raise_for_status()
+                return response
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_err = e
+                if attempt < MAX_RETRIES:
+                    wait = BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(f"Network error (attempt {attempt+1}/{MAX_RETRIES+1}): "
+                                   f"{e}. Retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
+        raise last_err or RuntimeError("Exhausted retries")
 
     def _encode_image_to_base64(self, image_path):
         """Encodes an image file to base64 string."""
@@ -88,8 +127,7 @@ class AgentCharlie:
                     "parameters": parameters
                 }
 
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
+                response = self._post_with_backoff(url, headers, payload)
                 result = response.json()
 
                 # Parse Imagen Response
@@ -167,8 +205,7 @@ class AgentCharlie:
                     }
                 }
 
-                response = requests.post(url, headers=headers, json=payload)
-                response.raise_for_status()
+                response = self._post_with_backoff(url, headers, payload)
                 result = response.json()
 
                 # Parse Gemini Response

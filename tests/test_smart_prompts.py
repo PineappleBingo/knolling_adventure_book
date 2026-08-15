@@ -11,10 +11,12 @@ from src.modules.prompt_generator import AgentBravo
 class TestSmartPrompts(unittest.TestCase):
     def setUp(self):
         self.bravo = AgentBravo()
-        # Mock the vision model to avoid API calls
-        self.bravo.vision_model = MagicMock()
-        self.bravo.vision_model.generate_content.return_value.text = "Mocked Prompt"
-        
+        # Mock the API call layer to avoid network (post-google-genai migration:
+        # AgentBravo calls _call_with_backoff(model_name, contents))
+        self.bravo._call_with_backoff = MagicMock(
+            return_value=MagicMock(text="Mocked Prompt")
+        )
+
         # Mock rate limit to speed up tests
         self.bravo._rate_limit = MagicMock()
 
@@ -52,24 +54,24 @@ class TestSmartPrompts(unittest.TestCase):
             with patch('PIL.Image.open'):
                 # Generate a prompt for a non-cover page
                 self.bravo._generate_smart_prompt("knolling", "Test", "Context")
-                
-                # Check the arguments passed to generate_content
-                call_args = self.bravo.vision_model.generate_content.call_args
-                meta_prompt = call_args[0][0][0] # First arg, first element (list), first item (string)
-                
+
+                # _call_with_backoff(model_name, contents) — contents[0] is the meta-prompt
+                call_args = self.bravo._call_with_backoff.call_args
+                meta_prompt = call_args[0][1][0]
+
                 self.assertIn("CRITICAL: The Wireframe contains COLORED ZONES", meta_prompt)
                 self.assertIn("pure BLACK & WHITE line art", meta_prompt)
-                
+
                 print("Verified 'No Color' instruction for interior page.")
-                
+
                 # Test Cover (should NOT have the restriction)
                 self.bravo._generate_smart_prompt("cover", "Test", "Context")
-                call_args = self.bravo.vision_model.generate_content.call_args
-                meta_prompt = call_args[0][0][0]
-                
-                self.assertNotIn("pure BLACK & WHITE line art", meta_prompt)
+                call_args = self.bravo._call_with_backoff.call_args
+                meta_prompt = call_args[0][1][0]
+
+                self.assertNotIn("The final output must be pure BLACK & WHITE line art", meta_prompt)
                 self.assertIn("Output full color", meta_prompt)
-                
+
                 print("Verified 'Full Color' instruction for cover.")
 
 if __name__ == '__main__':

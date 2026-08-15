@@ -75,7 +75,7 @@ class AgentOmega:
                 "negative_dna": cover_neg
             })
             
-            generated_images = []
+            generated_pages = []  # [{"path","page_type","page_number"}] — assembler's single source of truth
             preview_images = {} # Store paths by type for preview
             
             # Limit prompts based on TARGET_PAGES or PAGE_COUNT
@@ -120,37 +120,49 @@ class AgentOmega:
                     negative_dna=negative_dna
                 )
 
-                # QA Check (Retry Loop) — pass first reference image for comparison
+                # QA Check (Retry Loop) — pass first reference image for comparison.
+                # On FAIL the specific reasons are fed back into the retry prompt:
+                # resending a byte-identical request only re-rolls sampling noise.
                 qa_ref = reference_images[0] if reference_images else None
                 passed = False
                 retries = 0
                 while not passed and retries < 3:
-                    passed = self.delta.quality_check(image_path, reference_image_path=qa_ref)
+                    passed, qa_reasons = self.delta.quality_check(image_path, reference_image_path=qa_ref)
                     if not passed:
-                        logger.warning(f"Image {i+1} failed QA. Retrying ({retries+1}/3)...")
+                        logger.warning(f"Image {i+1} failed QA ({qa_reasons}). Retrying ({retries+1}/3)...")
                         retries += 1
-                        # Retry generation
+                        retry_prompt = p['prompt']
+                        if qa_reasons:
+                            retry_prompt += (
+                                "\n\nPREVIOUS ATTEMPT REJECTED by quality control for these "
+                                "specific issues — correct every one of them:\n- "
+                                + "\n- ".join(qa_reasons)
+                            )
                         image_path = self.charlie.generate_image(
-                            p['prompt'], theme, page_num_str,
+                            retry_prompt, theme, page_num_str,
                             wireframe_path=wireframe_path,
                             reference_images=reference_images,
                             negative_dna=negative_dna
                         )
-                
+
                 if passed:
-                    generated_images.append(image_path)
+                    generated_pages.append({
+                        "path": image_path,
+                        "page_type": p['type'],
+                        "page_number": p.get('page_number', i + 1),
+                    })
                     preview_images[p['type']] = image_path
-                    self.golf.update_progress(run_id, f"Image {i+1} Generated", len(generated_images))
+                    self.golf.update_progress(run_id, f"Image {i+1} Generated", len(generated_pages))
                 else:
                     logger.error(f"Image {i+1} failed QA after retries. Skipping.")
             
             # 4. Assembly
-            if generated_images:
+            if generated_pages:
                 if progress_callback:
-                    await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_images)}/{total_steps}\n📝 Status: Assembling PDF...")
+                    await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_pages)}/{total_steps}\n📝 Status: Assembling PDF...")
 
                 logger.info("Agent Echo: Assembling PDF...")
-                pdf_path = self.echo.assemble_pdf(generated_images)
+                pdf_path = self.echo.assemble_pdf(generated_pages)
                 
                 # 5. Finish
                 # In real app, upload to Drive and get link

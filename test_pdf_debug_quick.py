@@ -18,9 +18,13 @@ print(f"📄 Using {len(test_images)} test images:")
 for img in test_images:
     print(f"   - {os.path.basename(img)}")
 
-# Create PDF
+# Create PDF — assemble_pdf takes explicit page metadata dicts
+test_pages = [
+    {"path": p, "page_type": "mission", "page_number": i + 2}
+    for i, p in enumerate(test_images)
+]
 echo = AgentEcho()
-pdf_path = echo.assemble_pdf(test_images)
+pdf_path = echo.assemble_pdf(test_pages)
 
 if pdf_path:
     print(f"\n✅ Test PDF created: {pdf_path}")

@@ -36,7 +36,9 @@ class AgentEcho:
             logger.warning("🔍 PDF DEBUG MODE ENABLED: Text will render in MAGENTA")
 
     def _register_fonts(self):
-        """Registers Google Fonts from assets/fonts/"""
+        """Registers Google Fonts from assets/fonts/. Fails fast on any missing font:
+        an unregistered font would otherwise surface later as a KeyError inside
+        draw_text_overlay and silently kill the whole PDF."""
         fonts = [
             ("TitanOne", config.FONT_TITLE_MAIN),
             ("FredokaOne", config.FONT_SUBTITLE),
@@ -44,17 +46,21 @@ class AgentEcho:
             ("PatrickHand", config.FONT_HANDWRITING),
             ("Sniglet", config.FONT_LEGAL)
         ]
-        
+
+        missing = []
         for name, filename in fonts:
-            try:
-                path = os.path.join(config.PATH_FONTS, filename)
-                if os.path.exists(path):
-                    pdfmetrics.registerFont(TTFont(name, path))
-                    logger.info(f"✅ Registered font: {name}")
-                else:
-                    logger.warning(f"⚠️  Font file not found: {path}")
-            except Exception as e:
-                logger.error(f"❌ Failed to register font {name}: {e}")
+            path = os.path.join(config.PATH_FONTS, filename)
+            if os.path.exists(path):
+                pdfmetrics.registerFont(TTFont(name, path))
+                logger.info(f"✅ Registered font: {name}")
+            else:
+                missing.append(path)
+
+        if missing:
+            raise RuntimeError(
+                f"Missing font files (see assets/MANIFEST.md): {missing}. "
+                "Text overlay cannot render without them."
+            )
         
     def apply_color_masking(self, image_path):
         """
@@ -205,90 +211,110 @@ class AgentEcho:
             logger.error(f"❌ Text overlay failed for {page_type}: {e}")
             raise
 
-    def assemble_pdf(self, image_paths):
+    def _draw_image_fitted(self, c, img_path, page_w, page_h):
         """
-        Assembles the PDF from the generated images.
-        TASK 3 FIX: Ensures correct layer order (image FIRST, then text OVER it).
-        Returns the path to the generated PDF.
+        Draws the image preserving aspect ratio ("cover" fit: fill the page,
+        center-crop the overflow) instead of stretching, and logs effective DPI.
         """
-        if not image_paths:
-            logger.error("❌ No images to assemble.")
-            return None
-            
+        with Image.open(img_path) as im:
+            px_w, px_h = im.size
+            page_aspect = page_w / page_h
+            img_aspect = px_w / px_h
+
+            if abs(img_aspect - page_aspect) / page_aspect > 0.02:
+                logger.warning(
+                    f"  ⚠️  Aspect mismatch (image {img_aspect:.3f} vs page {page_aspect:.3f}) "
+                    f"— center-cropping instead of stretching"
+                )
+                if img_aspect > page_aspect:
+                    crop_w = int(px_h * page_aspect)
+                    x0 = (px_w - crop_w) // 2
+                    im_c = im.crop((x0, 0, x0 + crop_w, px_h))
+                else:
+                    crop_h = int(px_w / page_aspect)
+                    y0 = (px_h - crop_h) // 2
+                    im_c = im.crop((0, y0, px_w, y0 + crop_h))
+                base, ext = os.path.splitext(img_path)
+                cropped_path = f"{base}_fit{ext}"
+                im_c.save(cropped_path)
+                img_path = cropped_path
+                px_w, px_h = im_c.size
+
+        page_w_in = page_w / inch
+        effective_dpi = px_w / page_w_in
+        if effective_dpi < 300:
+            logger.warning(f"  ⚠️  Effective resolution {effective_dpi:.0f} DPI < KDP minimum 300 DPI "
+                           f"({px_w}x{px_h}px on {page_w_in:.3f}\" page)")
+        else:
+            logger.info(f"  ✅ Effective resolution: {effective_dpi:.0f} DPI")
+
+        c.drawImage(img_path, 0, 0, width=page_w, height=page_h)
+        return img_path
+
+    # Page types that receive a programmatic text overlay (Bible §1.6)
+    TEXT_OVERLAY_TYPES = {"mission", "parents", "intro", "knolling", "certificate"}
+
+    def assemble_pdf(self, pages):
+        """
+        Assembles the PDF from generated pages.
+
+        Args:
+            pages: list of dicts with explicit metadata (single source of truth is
+                   the orchestrator's prompt data — NO filename sniffing):
+                   {"path": str, "page_type": str, "page_number": int}
+
+        Returns the path to the generated PDF. Raises on assembly failure —
+        a silent None return previously masked total failures.
+        """
+        if not pages:
+            raise ValueError("No pages to assemble.")
+
         output_filename = f"temp/Knolling_Adventure_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
         logger.info(f"📄 Assembling PDF: {output_filename}")
-        logger.info("=" * 80)
-        logger.info("LAYER ORDER VERIFICATION (CRITICAL FOR TEXT VISIBILITY)")
-        logger.info("=" * 80)
-        
-        try:
-            c = canvas.Canvas(output_filename, pagesize=(self.width, self.height))
-            
-            for img_path in image_paths:
-                if os.path.exists(img_path):
-                    logger.info(f"\n📄 Processing: {img_path}")
-                    
-                    # Apply Color Masking & Grayscale Conversion
-                    processed_img_path = self.apply_color_masking(img_path)
-                    
-                    if processed_img_path:
-                        # TASK 3 FIX: CRITICAL LAYER ORDER
-                        # Step 1: Draw Image FIRST (Background Layer)
-                        logger.info("  1️⃣  Drawing IMAGE layer (background)...")
-                        is_cover = "Cover" in img_path or "cover" in img_path
-                        if is_cover:
-                            page_w, page_h = self.cover_width, self.cover_height
-                        else:
-                            page_w, page_h = self.width, self.height
-                        c.setPageSize((page_w, page_h))
-                        c.drawImage(processed_img_path, 0, 0, width=page_w, height=page_h)
-                        
-                        # Determine Page Type from filename (MVP heuristic)
-                        page_type = "unknown"
-                        if "Cover" in img_path or "cover" in img_path: 
-                            page_type = "cover"
-                        elif "Page1" in img_path or "page1" in img_path: 
-                            page_type = "mission"
-                        elif "Page2" in img_path or "page2" in img_path: 
-                            page_type = "parents"
-                        elif "Page3" in img_path or "page3" in img_path: 
-                            page_type = "intro"
-                        elif "Page4" in img_path or "page4" in img_path: 
-                            page_type = "knolling"
-                        elif "Page5" in img_path or "page5" in img_path: 
-                            page_type = "action"
-                        elif "Page50" in img_path or "page50" in img_path: 
-                            page_type = "certificate"
-                        
-                        logger.info(f"  📋 Detected page type: {page_type}")
-                        
-                        # Step 2: Draw Text SECOND (Foreground Layer)
-                        if page_type != "unknown" and page_type != "action" and page_type != "cover":
-                            logger.info("  2️⃣  Drawing TEXT layer (foreground)...")
-                            self.draw_text_overlay(c, page_type)
-                        else:
-                            logger.info("  ⏭️  Skipping text overlay (not applicable for this page type)")
-                        
-                        # Step 3: Finalize Page
-                        logger.info("  3️⃣  Finalizing page...")
-                        c.showPage()
-                        
-                        # Cleanup temp file
-                        os.remove(processed_img_path)
-                        logger.info("  ✅ Page complete\n")
-                    else:
-                        logger.warning(f"⚠️  Failed to process image: {img_path}")
-                else:
-                    logger.warning(f"⚠️  Image not found: {img_path}")
-            
-            c.save()
-            logger.info("=" * 80)
-            logger.info(f"✅ PDF ASSEMBLY COMPLETE: {output_filename}")
-            logger.info("=" * 80)
-            return output_filename
-            
-        except Exception as e:
-            logger.error(f"❌ PDF Assembly failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+
+        # Interior pages in reading order, cover first if present
+        ordered = sorted(pages, key=lambda p: (p.get("page_type") != "cover", p.get("page_number", 0)))
+
+        c = canvas.Canvas(output_filename, pagesize=(self.width, self.height))
+
+        for page in ordered:
+            img_path = page["path"]
+            page_type = page.get("page_type", "unknown")
+
+            if not os.path.exists(img_path):
+                raise FileNotFoundError(f"Generated image missing during assembly: {img_path}")
+
+            logger.info(f"\n📄 Processing: {img_path} (type={page_type}, page={page.get('page_number')})")
+
+            # Color masking / grayscale applies to interiors only — covers stay full color
+            if page_type == "cover":
+                processed_img_path = img_path
+                page_w, page_h = self.cover_width, self.cover_height
+            else:
+                processed_img_path = self.apply_color_masking(img_path)
+                if not processed_img_path:
+                    raise RuntimeError(f"Color masking failed for {img_path}")
+                page_w, page_h = self.width, self.height
+
+            # Layer 1: image (background), aspect-preserving
+            c.setPageSize((page_w, page_h))
+            drawn_path = self._draw_image_fitted(c, processed_img_path, page_w, page_h)
+
+            # Layer 2: programmatic text (foreground)
+            if page_type in self.TEXT_OVERLAY_TYPES:
+                logger.info("  2️⃣  Drawing TEXT layer (foreground)...")
+                self.draw_text_overlay(c, page_type)
+            else:
+                logger.info(f"  ⏭️  No text overlay for page type '{page_type}'")
+
+            c.showPage()
+
+            # Cleanup temp files
+            for tmp in {processed_img_path, drawn_path} - {img_path}:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            logger.info("  ✅ Page complete")
+
+        c.save()
+        logger.info(f"✅ PDF ASSEMBLY COMPLETE: {output_filename}")
+        return output_filename
