@@ -11,6 +11,19 @@ load_dotenv()
 # Deployment Tier: 'FREE' or 'PAID'
 DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
+# Quality Mode: 'DRAFT' (cheap iteration) or 'FINAL' (shipping quality)
+# DRAFT  -> gemini-2.5-flash-image  (~1K output, up to 5 reference images)
+# FINAL  -> gemini-3-pro-image      (up to 4K output, up to 14 reference images)
+QUALITY_MODE = os.getenv("QUALITY_MODE", "DRAFT").upper()
+
+# When false (default), missing reference assets abort the run instead of
+# silently degrading to text-only generation (the historic "style drift" cause).
+ALLOW_DEGRADED_ASSETS = os.getenv("ALLOW_DEGRADED_ASSETS", "false").lower() == "true"
+
+# Asset key roster: every page key needs 3 reference PNGs in assets/
+ASSET_KEYS = ["cover", "page1", "page2", "page3", "page4", "page5", "page50"]
+ASSET_ROLES = ["01", "layout_wireframe_kdp", "structure_example"]
+
 # 0.0 SYSTEM CONFIGURATION (Physical Specs)
 TRIM_WIDTH = 8.5
 TRIM_HEIGHT = 8.5
@@ -53,11 +66,19 @@ FONT_LEGAL = "Sniglet-Regular.ttf"
 PATH_FONTS = "assets/fonts/"
 
 # Image Model Configuration (Agent Alpha Logic)
-if DEPLOYMENT_TIER == "PAID":
-    GEN_MODEL_ID = "imagen-4.0-generate-001"
+# QUALITY_MODE selects the model; both use the same :generateContent multimodal
+# path so reference images ALWAYS reach the image model. The old Imagen
+# :predict path was removed: imagen-4.0-generate-001 cannot accept image input,
+# so the "premium" tier silently dropped every reference (root cause of drift).
+if QUALITY_MODE == "FINAL":
+    GEN_MODEL_ID = "gemini-3-pro-image"   # Nano Banana Pro: <=14 refs, up to 4K
+    # imageSize is only supported on gemini-3-pro-image: "1K" | "2K" | "4K"
+    IMAGE_SIZE = os.getenv("IMAGE_SIZE", "2K").upper()
+    COVER_IMAGE_SIZE = os.getenv("COVER_IMAGE_SIZE", "4K").upper()
 else:
-    # FREE Tier: Use Gemini 2.0 Flash Exp (Image Generation)
-    GEN_MODEL_ID = "models/gemini-2.0-flash-exp-image-generation"
+    GEN_MODEL_ID = "gemini-2.5-flash-image"  # draft iteration: <=5 refs, ~1K
+    IMAGE_SIZE = None
+    COVER_IMAGE_SIZE = None
 
 # QA Model Configuration (Same for both tiers)
 QA_MODEL_NAME = "models/gemini-2.5-pro"
@@ -76,8 +97,21 @@ else:
     IMG_GEN_DELAY = 20   # Safe buffer for image generation
     PROMPT_GEN_DELAY = 5 # Buffer for prompt generation
 
+# Cover geometry (KDP): spread width is a FUNCTION of page count.
+# Spine width for B&W paper: page_count * 0.002252". The historic hardcoded
+# 17.365" is only correct for exactly 50 pages.
+SPINE_INCHES_PER_PAGE = 0.002252
+
+def get_spine_width(page_count=None):
+    return (page_count or PAGE_COUNT) * SPINE_INCHES_PER_PAGE
+
+def get_cover_spread_size(page_count=None):
+    """Returns (width_in, height_in) of the full cover spread incl. bleed."""
+    spine = get_spine_width(page_count)
+    width = TRIM_WIDTH * 2 + spine + BLEED_SIZE * 2
+    height = TRIM_HEIGHT + BLEED_SIZE * 2
+    return width, height
+
 def get_status_message():
-    if DEPLOYMENT_TIER == "PAID":
-        return f"🚀 Running in PAID mode ({GEN_MODEL_ID}) - Max Speed"
-    else:
-        return f"🐢 Running in FREE mode ({GEN_MODEL_ID}) - Safe Limits Active"
+    speed = "Max Speed" if DEPLOYMENT_TIER == "PAID" else "Safe Limits Active"
+    return f"🎨 QUALITY_MODE={QUALITY_MODE} ({GEN_MODEL_ID}) | Tier={DEPLOYMENT_TIER} - {speed}"

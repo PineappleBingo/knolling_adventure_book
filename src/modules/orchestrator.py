@@ -8,10 +8,12 @@ import uuid
 import time
 from src import config
 from src.modules.tracking import AgentGolf
+from src.modules.system_architect import AgentAlpha
 from src.modules.prompt_generator import AgentBravo
 from src.modules.image_generator import AgentCharlie
 from src.modules.qa_agent import AgentDelta
 from src.modules.pdf_assembler import AgentEcho
+from src.modules.kdp_validator import KDPValidator
 
 logger = logging.getLogger("AgentOmega")
 
@@ -19,21 +21,30 @@ class AgentOmega:
     def __init__(self):
         logger.info("Agent Omega initialized.")
         logger.info(config.get_status_message())
-        
+
         # Initialize Sub-Agents
+        self.alpha = AgentAlpha()
         self.golf = AgentGolf()
         self.bravo = AgentBravo()
         self.charlie = AgentCharlie()
         self.delta = AgentDelta()
         self.echo = AgentEcho()
-        
+
     async def start_job(self, theme, progress_callback=None):
         """
         Starts the book generation process for a given theme.
         """
         run_id = str(uuid.uuid4())[:8]
         logger.info(f"Starting job {run_id} for theme: {theme}")
-        
+
+        # 0. Preflight — abort loudly before spending any API budget
+        try:
+            self.alpha.assert_ready_for_generation()
+        except EnvironmentError as env_err:
+            if progress_callback:
+                await progress_callback(f"🛑 Preflight failed:\n{env_err}")
+            raise
+
         # 1. Initialize Tracking
         self.golf.start_job(run_id, theme)
         
@@ -48,22 +59,26 @@ class AgentOmega:
             prompt_data = self.bravo.generate_prompts(theme)
             prompts = prompt_data['prompts']
             
-            # Generate Cover using the SAME context
-            cover_prompt = self.bravo.generate_cover(
-                theme, 
-                prompt_data['main_character'], 
+            # Generate Cover using the SAME context. Front and back are two
+            # separate square generations; Agent Echo composites the KDP spread
+            # (back + spine + front) and draws title/subtitle/logo in real fonts.
+            cover_data = self.bravo.generate_cover(
+                theme,
+                prompt_data['main_character'],
                 prompt_data['gear_objects']
             )
+            for side in ("back", "front"):
+                c_prompt, c_wf, c_refs, c_neg = cover_data[side]
+                prompts.insert(0, {
+                    "type": f"cover_{side}",
+                    "page_number": 1,
+                    "prompt": c_prompt,
+                    "wireframe_path": c_wf,
+                    "reference_images": c_refs,
+                    "negative_dna": c_neg
+                })
             
-            # Insert Cover at the beginning
-            prompts.insert(0, {
-                "type": "cover",
-                "page_number": 1, # Cover is technically Page 1 in this context, or we can treat it as special. 
-                                  # If user says "1,50", they likely mean Cover (1) and Cert (50).
-                "prompt": cover_prompt
-            })
-            
-            generated_images = []
+            generated_pages = []  # [{"path","page_type","page_number"}] — assembler's single source of truth
             preview_images = {} # Store paths by type for preview
             
             # Limit prompts based on TARGET_PAGES or PAGE_COUNT
@@ -88,54 +103,102 @@ class AgentOmega:
                     await progress_callback(f"⚙️ Phase: Agent Charlie & Delta\n📊 Progress: {i}/{total_steps}\n📝 Status: Generating {p['type']} image...")
 
                 logger.info(f"Processing Image {i+1}/{len(prompts)} ({p['type']})...")
-                
+
                 # Generate
                 # Use actual page number for naming
+                is_cover = p['type'].startswith('cover')
                 pg_num = p.get('page_number', i+1)
                 page_num_str = str(pg_num).zfill(2)
-                if p['type'] == 'cover':
-                    page_num_str = "Cover"
-                
-                image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
-                
-                # QA Check (Retry Loop)
+                if is_cover:
+                    page_num_str = "CoverFront" if p['type'] == "cover_front" else "CoverBack"
+
+                # Resolve wireframe + reference image paths + negative DNA for multimodal input
+                wireframe_path = p.get('wireframe_path')
+                reference_images = p.get('reference_images')
+                negative_dna = p.get('negative_dna')
+                image_size = config.COVER_IMAGE_SIZE if is_cover else config.IMAGE_SIZE
+
+                image_path = self.charlie.generate_image(
+                    p['prompt'], theme, page_num_str,
+                    wireframe_path=wireframe_path,
+                    reference_images=reference_images,
+                    negative_dna=negative_dna,
+                    aspect_ratio="1:1",
+                    image_size=image_size
+                )
+
+                # QA Check (Retry Loop) — pass first reference image for comparison.
+                # On FAIL the specific reasons are fed back into the retry prompt:
+                # resending a byte-identical request only re-rolls sampling noise.
+                qa_ref = reference_images[0] if reference_images else None
                 passed = False
                 retries = 0
                 while not passed and retries < 3:
-                    passed = self.delta.quality_check(image_path)
+                    passed, qa_reasons = self.delta.quality_check(
+                        image_path, reference_image_path=qa_ref,
+                        is_color_page=is_cover
+                    )
                     if not passed:
-                        logger.warning(f"Image {i+1} failed QA. Retrying ({retries+1}/3)...")
+                        logger.warning(f"Image {i+1} failed QA ({qa_reasons}). Retrying ({retries+1}/3)...")
                         retries += 1
-                        # Retry generation
-                        image_path = self.charlie.generate_image(p['prompt'], theme, page_num_str)
-                
+                        retry_prompt = p['prompt']
+                        if qa_reasons:
+                            retry_prompt += (
+                                "\n\nPREVIOUS ATTEMPT REJECTED by quality control for these "
+                                "specific issues — correct every one of them:\n- "
+                                + "\n- ".join(qa_reasons)
+                            )
+                        image_path = self.charlie.generate_image(
+                            retry_prompt, theme, page_num_str,
+                            wireframe_path=wireframe_path,
+                            reference_images=reference_images,
+                            negative_dna=negative_dna,
+                            aspect_ratio="1:1",
+                            image_size=image_size
+                        )
+
                 if passed:
-                    generated_images.append(image_path)
+                    generated_pages.append({
+                        "path": image_path,
+                        "page_type": p['type'],
+                        "page_number": p.get('page_number', i + 1),
+                    })
                     preview_images[p['type']] = image_path
-                    self.golf.update_progress(run_id, f"Image {i+1} Generated", len(generated_images))
+                    self.golf.update_progress(run_id, f"Image {i+1} Generated", len(generated_pages))
                 else:
                     logger.error(f"Image {i+1} failed QA after retries. Skipping.")
             
             # 4. Assembly
-            if generated_images:
+            if generated_pages:
                 if progress_callback:
-                    await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_images)}/{total_steps}\n📝 Status: Assembling PDF...")
+                    await progress_callback(f"⚙️ Phase: Agent Echo\n📊 Progress: {len(generated_pages)}/{total_steps}\n📝 Status: Assembling PDF...")
 
                 logger.info("Agent Echo: Assembling PDF...")
-                pdf_path = self.echo.assemble_pdf(generated_images)
-                
-                # 5. Finish
-                # In real app, upload to Drive and get link
-                drive_link = f"file://{pdf_path}" 
+                cover_text = {
+                    "title": "KNOLLING ADVENTURES",
+                    "subtitle": f"{theme.title()} Edition",
+                }
+                pdf_path = self.echo.assemble_pdf(generated_pages, cover_text=cover_text)
+
+                # 5. KDP print-quality gate — a failing book is not "done"
+                validator = KDPValidator()
+                kdp_report = validator.validate(pdf_path)
+                if progress_callback:
+                    await progress_callback(validator.summary_text(kdp_report))
+
+                # 6. Finish
+                drive_link = f"file://{pdf_path}"
                 self.golf.finish_job(run_id, drive_link)
-                logger.info(f"Job {run_id} completed successfully.")
-                
+                logger.info(f"Job {run_id} completed "
+                            f"({'KDP-ready' if kdp_report['passed'] else 'KDP pre-flight FAILED'}).")
+
                 return {
-                    "status": "SUCCESS",
+                    "status": "SUCCESS" if kdp_report["passed"] else "NEEDS_ATTENTION",
                     "run_id": run_id,
                     "pdf_path": pdf_path,
                     "drive_link": drive_link,
-                    "previews": preview_images
+                    "previews": preview_images,
+                    "kdp_report": kdp_report
                 }
             else:
                 error_msg = "No images generated. Job failed."

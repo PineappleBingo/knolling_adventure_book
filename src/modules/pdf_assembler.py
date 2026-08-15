@@ -6,6 +6,8 @@ Mission: Handle PDF assembly with VERIFIED text overlay compositing.
 import logging
 import os
 import time
+from datetime import datetime
+import numpy as np
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import inch
 from reportlab.lib.colors import Color, magenta, black
@@ -19,11 +21,18 @@ logger = logging.getLogger("AgentEcho")
 class AgentEcho:
     def __init__(self):
         logger.info("Agent Echo v2.0 initialized (with Text Overlay Debugging).")
-        # Bible Specs: 8.5" x 8.5" Trim Size
-        # Bleed: 0.125" on all sides
-        # Total Size: 8.75" x 8.75"
-        self.width = 8.75 * inch
-        self.height = 8.75 * inch
+        # Bible Specs (§1.4): 8.5" x 8.5" trim. KDP bleed extends TOP/BOTTOM/OUTER
+        # edges only — never the binding edge — so the interior page canvas is
+        # 8.625" x 8.75" (w: 8.5 + 0.125 outer; h: 8.5 + 0.125 top + 0.125 bottom).
+        # The old square 8.75 x 8.75 canvas was a spec violation.
+        self.width = (config.TRIM_WIDTH + config.BLEED_SIZE) * inch
+        self.height = (config.TRIM_HEIGHT + 2 * config.BLEED_SIZE) * inch
+        # Cover Spread: Back + Spine + Front + Bleeds — spine width depends on
+        # PAGE_COUNT, so the spread is computed, not hardcoded (17.365" was only
+        # correct for exactly 50 pages).
+        cover_w_in, cover_h_in = config.get_cover_spread_size()
+        self.cover_width = cover_w_in * inch
+        self.cover_height = cover_h_in * inch
         self._register_fonts()
         
         # Debug mode: Use magenta text for visibility testing
@@ -32,7 +41,9 @@ class AgentEcho:
             logger.warning("🔍 PDF DEBUG MODE ENABLED: Text will render in MAGENTA")
 
     def _register_fonts(self):
-        """Registers Google Fonts from assets/fonts/"""
+        """Registers Google Fonts from assets/fonts/. Fails fast on any missing font:
+        an unregistered font would otherwise surface later as a KeyError inside
+        draw_text_overlay and silently kill the whole PDF."""
         fonts = [
             ("TitanOne", config.FONT_TITLE_MAIN),
             ("FredokaOne", config.FONT_SUBTITLE),
@@ -40,49 +51,51 @@ class AgentEcho:
             ("PatrickHand", config.FONT_HANDWRITING),
             ("Sniglet", config.FONT_LEGAL)
         ]
-        
+
+        missing = []
         for name, filename in fonts:
-            try:
-                path = os.path.join(config.PATH_FONTS, filename)
-                if os.path.exists(path):
-                    pdfmetrics.registerFont(TTFont(name, path))
-                    logger.info(f"✅ Registered font: {name}")
-                else:
-                    logger.warning(f"⚠️  Font file not found: {path}")
-            except Exception as e:
-                logger.error(f"❌ Failed to register font {name}: {e}")
+            path = os.path.join(config.PATH_FONTS, filename)
+            if os.path.exists(path):
+                pdfmetrics.registerFont(TTFont(name, path))
+                logger.info(f"✅ Registered font: {name}")
+            else:
+                missing.append(path)
+
+        if missing:
+            raise RuntimeError(
+                f"Missing font files (see assets/MANIFEST.md): {missing}. "
+                "Text overlay cannot render without them."
+            )
         
+    # Saturation above this marks a pixel as a colored wireframe guide.
+    # Black line art and white paper both have ~0 channel spread.
+    MASK_SATURATION_THRESHOLD = 60
+
     def apply_color_masking(self, image_path):
         """
         [PROTOCOL_COLOR_MASKING]
-        Detects Red/Green pixels (Wireframe artifacts) and replaces them with White.
-        Then converts to Grayscale.
+        Whites out ANY saturated pixel (Red/Green/Blue wireframe guides — the old
+        per-pixel loop only caught R and G, letting blue guides print as gray),
+        then converts to grayscale. Vectorized with numpy: a 300-DPI page is
+        ~6.9M pixels, which the previous pure-Python loop handled one at a time.
+        Saves lossless PNG — JPEG ringing on 1-bit line art is a classic KDP
+        print-QA rejection.
         """
         try:
             with Image.open(image_path) as img:
-                img = img.convert("RGB")
-                datas = img.getdata()
-                
-                new_data = []
-                for item in datas:
-                    # Detect Red (R>200, G<100, B<100) or Green (G>200, R<100, B<100)
-                    if (item[0] > 200 and item[1] < 100 and item[2] < 100) or \
-                       (item[1] > 200 and item[0] < 100 and item[2] < 100):
-                        new_data.append((255, 255, 255)) # Replace with White
-                    else:
-                        new_data.append(item)
-                        
-                img.putdata(new_data)
-                
-                # Convert to Grayscale (L)
-                gray_img = img.convert("L")
-                
-                # Save temp masked version
-                temp_masked = image_path.replace(".png", "_masked.jpg")
-                gray_img.save(temp_masked, quality=95)
-                logger.info(f"✅ Color masking applied: {temp_masked}")
-                return temp_masked
-                
+                arr = np.asarray(img.convert("RGB"), dtype=np.int16)
+
+            saturation = arr.max(axis=2) - arr.min(axis=2)
+            arr[saturation > self.MASK_SATURATION_THRESHOLD] = 255
+
+            gray_img = Image.fromarray(arr.astype(np.uint8)).convert("L")
+
+            base, _ = os.path.splitext(image_path)
+            temp_masked = f"{base}_masked.png"
+            gray_img.save(temp_masked)
+            logger.info(f"✅ Color masking applied: {temp_masked}")
+            return temp_masked
+
         except Exception as e:
             logger.error(f"❌ Color masking failed for {image_path}: {e}")
             return None
@@ -201,84 +214,225 @@ class AgentEcho:
             logger.error(f"❌ Text overlay failed for {page_type}: {e}")
             raise
 
-    def assemble_pdf(self, image_paths):
+    def _draw_image_fitted(self, c, img_path, page_w, page_h):
         """
-        Assembles the PDF from the generated images.
-        TASK 3 FIX: Ensures correct layer order (image FIRST, then text OVER it).
-        Returns the path to the generated PDF.
+        Draws the image preserving aspect ratio ("cover" fit: fill the page,
+        center-crop the overflow) instead of stretching, and logs effective DPI.
         """
-        if not image_paths:
-            logger.error("❌ No images to assemble.")
-            return None
-            
-        output_filename = f"temp/Knolling_Adventure_{int(time.time())}.pdf"
-        logger.info(f"📄 Assembling PDF: {output_filename}")
-        logger.info("=" * 80)
-        logger.info("LAYER ORDER VERIFICATION (CRITICAL FOR TEXT VISIBILITY)")
-        logger.info("=" * 80)
-        
-        try:
-            c = canvas.Canvas(output_filename, pagesize=(self.width, self.height))
-            
-            for img_path in image_paths:
-                if os.path.exists(img_path):
-                    logger.info(f"\n📄 Processing: {img_path}")
-                    
-                    # Apply Color Masking & Grayscale Conversion
-                    processed_img_path = self.apply_color_masking(img_path)
-                    
-                    if processed_img_path:
-                        # TASK 3 FIX: CRITICAL LAYER ORDER
-                        # Step 1: Draw Image FIRST (Background Layer)
-                        logger.info("  1️⃣  Drawing IMAGE layer (background)...")
-                        c.drawImage(processed_img_path, 0, 0, width=self.width, height=self.height)
-                        
-                        # Determine Page Type from filename (MVP heuristic)
-                        page_type = "unknown"
-                        if "Cover" in img_path or "cover" in img_path: 
-                            page_type = "cover"
-                        elif "Page1" in img_path or "page1" in img_path: 
-                            page_type = "mission"
-                        elif "Page2" in img_path or "page2" in img_path: 
-                            page_type = "parents"
-                        elif "Page3" in img_path or "page3" in img_path: 
-                            page_type = "intro"
-                        elif "Page4" in img_path or "page4" in img_path: 
-                            page_type = "knolling"
-                        elif "Page5" in img_path or "page5" in img_path: 
-                            page_type = "action"
-                        elif "Page50" in img_path or "page50" in img_path: 
-                            page_type = "certificate"
-                        
-                        logger.info(f"  📋 Detected page type: {page_type}")
-                        
-                        # Step 2: Draw Text SECOND (Foreground Layer)
-                        if page_type != "unknown" and page_type != "action" and page_type != "cover":
-                            logger.info("  2️⃣  Drawing TEXT layer (foreground)...")
-                            self.draw_text_overlay(c, page_type)
-                        else:
-                            logger.info("  ⏭️  Skipping text overlay (not applicable for this page type)")
-                        
-                        # Step 3: Finalize Page
-                        logger.info("  3️⃣  Finalizing page...")
-                        c.showPage()
-                        
-                        # Cleanup temp file
-                        os.remove(processed_img_path)
-                        logger.info("  ✅ Page complete\n")
-                    else:
-                        logger.warning(f"⚠️  Failed to process image: {img_path}")
+        with Image.open(img_path) as im:
+            px_w, px_h = im.size
+            page_aspect = page_w / page_h
+            img_aspect = px_w / px_h
+
+            if abs(img_aspect - page_aspect) / page_aspect > 0.02:
+                logger.warning(
+                    f"  ⚠️  Aspect mismatch (image {img_aspect:.3f} vs page {page_aspect:.3f}) "
+                    f"— center-cropping instead of stretching"
+                )
+                if img_aspect > page_aspect:
+                    crop_w = int(px_h * page_aspect)
+                    x0 = (px_w - crop_w) // 2
+                    im_c = im.crop((x0, 0, x0 + crop_w, px_h))
                 else:
-                    logger.warning(f"⚠️  Image not found: {img_path}")
-            
-            c.save()
-            logger.info("=" * 80)
-            logger.info(f"✅ PDF ASSEMBLY COMPLETE: {output_filename}")
-            logger.info("=" * 80)
-            return output_filename
-            
-        except Exception as e:
-            logger.error(f"❌ PDF Assembly failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+                    crop_h = int(px_w / page_aspect)
+                    y0 = (px_h - crop_h) // 2
+                    im_c = im.crop((0, y0, px_w, y0 + crop_h))
+                base, ext = os.path.splitext(img_path)
+                cropped_path = f"{base}_fit{ext}"
+                im_c.save(cropped_path)
+                img_path = cropped_path
+                px_w, px_h = im_c.size
+
+        page_w_in = page_w / inch
+        effective_dpi = px_w / page_w_in
+        if effective_dpi < 300:
+            logger.warning(f"  ⚠️  Effective resolution {effective_dpi:.0f} DPI < KDP minimum 300 DPI "
+                           f"({px_w}x{px_h}px on {page_w_in:.3f}\" page)")
+        else:
+            logger.info(f"  ✅ Effective resolution: {effective_dpi:.0f} DPI")
+
+        c.drawImage(img_path, 0, 0, width=page_w, height=page_h)
+        return img_path
+
+    # Page types that receive a programmatic text overlay (Bible §1.6)
+    TEXT_OVERLAY_TYPES = {"mission", "parents", "intro", "knolling", "certificate"}
+
+    COMPOSE_DPI = 300  # KDP minimum print resolution
+
+    def _compose_cover_spread(self, front_path=None, back_path=None):
+        """
+        Composites the full KDP cover spread (back panel | spine | front panel)
+        from two square art generations at 300 DPI. The KDP barcode zone
+        (2.0" x 1.2", bottom-right of the back panel) is cleared to white.
+        Returns the path of the composed PNG.
+        """
+        dpi = self.COMPOSE_DPI
+        w_in, h_in = config.get_cover_spread_size()
+        W, H = int(round(w_in * dpi)), int(round(h_in * dpi))
+        panel_w = int(round((config.TRIM_WIDTH + config.BLEED_SIZE) * dpi))
+
+        canvas_img = Image.new("RGB", (W, H), "white")
+
+        def paste_panel(art_path, x0):
+            if not art_path or not os.path.exists(art_path):
+                return
+            with Image.open(art_path) as art:
+                art = art.convert("RGB")
+                # cover-fit into the panel (center-crop the overflow)
+                target_ratio = panel_w / H
+                aw, ah = art.size
+                if aw / ah > target_ratio:
+                    crop_w = int(ah * target_ratio)
+                    x = (aw - crop_w) // 2
+                    art = art.crop((x, 0, x + crop_w, ah))
+                else:
+                    crop_h = int(aw / target_ratio)
+                    y = (ah - crop_h) // 2
+                    art = art.crop((0, y, aw, y + crop_h))
+                art = art.resize((panel_w, H), Image.LANCZOS)
+                canvas_img.paste(art, (x0, 0))
+
+        paste_panel(back_path, 0)                 # back panel: left
+        paste_panel(front_path, W - panel_w)      # front panel: right
+        # spine stays white (spine text disallowed under 79 pages)
+
+        # Clear the KDP barcode restricted area (Bible Zone 7): 2.0" x 1.2" at
+        # the bottom-right of the BACK panel (KDP prints its barcode there)
+        bc_w, bc_h = int(2.0 * dpi), int(1.2 * dpi)
+        margin = int((config.BLEED_SIZE + 0.25) * dpi)
+        x1 = panel_w - margin - bc_w
+        y1 = H - margin - bc_h
+        canvas_img.paste((255, 255, 255), (x1, y1, x1 + bc_w, y1 + bc_h))
+
+        out_path = f"temp/cover_spread_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+        canvas_img.save(out_path)
+        logger.info(f"✅ Cover spread composed: {out_path} ({W}x{H}px @ {dpi} DPI)")
+        return out_path
+
+    def _draw_cover_text(self, c, cover_text):
+        """
+        Draws title/subtitle on the FRONT panel and the series logo (Zone 8,
+        1.2" tall per Bible) in real fonts. Typography is never AI-rendered.
+        """
+        title = cover_text.get("title", "KNOLLING ADVENTURES")
+        subtitle = cover_text.get("subtitle", "")
+
+        # Front panel geometry (right side of the spread)
+        panel_w = (config.TRIM_WIDTH + config.BLEED_SIZE) * inch
+        front_cx = self.cover_width - (config.BLEED_SIZE + config.TRIM_WIDTH / 2) * inch
+        safe_top = self.cover_height - (config.BLEED_SIZE + config.SAFE_MARGIN) * inch
+
+        c.setFillColor(black)
+        c.setFont("TitanOne", 64)
+        c.drawCentredString(front_cx, safe_top - 0.9 * inch, title)
+        if subtitle:
+            c.setFont("FredokaOne", 32)
+            c.drawCentredString(front_cx, safe_top - 1.6 * inch, subtitle)
+
+        # Logo: Zone 8, height exactly 1.2" (Bible), bottom-center of front panel
+        logo_path = "assets/logo.png"
+        if os.path.exists(logo_path):
+            with Image.open(logo_path) as logo:
+                lw, lh = logo.size
+            logo_h = 1.2 * inch
+            logo_w = logo_h * (lw / lh)
+            c.drawImage(
+                logo_path,
+                front_cx - logo_w / 2,
+                (config.BLEED_SIZE + config.SAFE_MARGIN) * inch,
+                width=logo_w, height=logo_h,
+                mask='auto'
+            )
+        else:
+            logger.warning("assets/logo.png not found — cover logo skipped")
+
+    def assemble_pdf(self, pages, cover_text=None):
+        """
+        Assembles the PDF from generated pages.
+
+        Args:
+            pages: list of dicts with explicit metadata (single source of truth is
+                   the orchestrator's prompt data — NO filename sniffing):
+                   {"path": str, "page_type": str, "page_number": int}
+                   Cover art arrives as page_type "cover_front"/"cover_back"
+                   (composited into one spread) or legacy "cover" (pre-made spread).
+            cover_text: optional {"title": ..., "subtitle": ...} drawn on the
+                   front panel in real fonts.
+
+        Returns the path to the generated PDF. Raises on assembly failure —
+        a silent None return previously masked total failures.
+        """
+        if not pages:
+            raise ValueError("No pages to assemble.")
+
+        output_filename = f"temp/Knolling_Adventure_{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+        logger.info(f"📄 Assembling PDF: {output_filename}")
+
+        cover_front = next((p for p in pages if p.get("page_type") == "cover_front"), None)
+        cover_back = next((p for p in pages if p.get("page_type") == "cover_back"), None)
+        legacy_cover = next((p for p in pages if p.get("page_type") == "cover"), None)
+        interiors = sorted(
+            (p for p in pages if p.get("page_type") not in ("cover", "cover_front", "cover_back")),
+            key=lambda p: p.get("page_number", 0)
+        )
+
+        c = canvas.Canvas(output_filename, pagesize=(self.width, self.height))
+
+        # ── Cover spread first ──
+        if cover_front or cover_back:
+            spread_path = self._compose_cover_spread(
+                front_path=cover_front["path"] if cover_front else None,
+                back_path=cover_back["path"] if cover_back else None,
+            )
+            c.setPageSize((self.cover_width, self.cover_height))
+            c.drawImage(spread_path, 0, 0, width=self.cover_width, height=self.cover_height)
+            self._draw_cover_text(c, cover_text or {})
+            c.showPage()
+            os.remove(spread_path)
+            logger.info("  ✅ Cover spread page complete")
+        elif legacy_cover:
+            c.setPageSize((self.cover_width, self.cover_height))
+            drawn = self._draw_image_fitted(c, legacy_cover["path"], self.cover_width, self.cover_height)
+            self._draw_cover_text(c, cover_text or {})
+            c.showPage()
+            if drawn != legacy_cover["path"] and os.path.exists(drawn):
+                os.remove(drawn)
+
+        # ── Interior pages in reading order ──
+        for page in interiors:
+            img_path = page["path"]
+            page_type = page.get("page_type", "unknown")
+
+            if not os.path.exists(img_path):
+                raise FileNotFoundError(f"Generated image missing during assembly: {img_path}")
+
+            logger.info(f"\n📄 Processing: {img_path} (type={page_type}, page={page.get('page_number')})")
+
+            # Color masking / grayscale applies to interiors only
+            processed_img_path = self.apply_color_masking(img_path)
+            if not processed_img_path:
+                raise RuntimeError(f"Color masking failed for {img_path}")
+            page_w, page_h = self.width, self.height
+
+            # Layer 1: image (background), aspect-preserving
+            c.setPageSize((page_w, page_h))
+            drawn_path = self._draw_image_fitted(c, processed_img_path, page_w, page_h)
+
+            # Layer 2: programmatic text (foreground)
+            if page_type in self.TEXT_OVERLAY_TYPES:
+                logger.info("  2️⃣  Drawing TEXT layer (foreground)...")
+                self.draw_text_overlay(c, page_type)
+            else:
+                logger.info(f"  ⏭️  No text overlay for page type '{page_type}'")
+
+            c.showPage()
+
+            # Cleanup temp files
+            for tmp in {processed_img_path, drawn_path} - {img_path}:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            logger.info("  ✅ Page complete")
+
+        c.save()
+        logger.info(f"✅ PDF ASSEMBLY COMPLETE: {output_filename}")
+        return output_filename

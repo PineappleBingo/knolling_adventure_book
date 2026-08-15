@@ -1,6 +1,7 @@
 # Secrets
 .env
 credentials.json
+.vscode/
 
 # Python
 __pycache__/
@@ -9,5 +10,8 @@ __pycache__/
 # Project specific
 temp/
 logs/
-assets/
 venv/
+
+# Assets ARE tracked (reference PNGs are the irreplaceable visual DNA of the series).
+# Only transient debug output under assets/ is ignored.
+assets/debug/

@@ -26,31 +26,30 @@ class TestMigrationV521(unittest.TestCase):
         if config.DEPLOYMENT_TIER == "PAID":
             self.assertEqual(config.GEN_MODEL_ID, "imagen-4.0-generate-001")
         else:
-            self.assertEqual(config.GEN_MODEL_ID, "models/gemini-2.0-flash-exp-image-generation")
-            
-    def test_negative_dna_injection(self):
-        print("\nTesting Negative DNA Injection...")
-        
-        # Mock the vision model response
-        class MockResponse:
-            text = "Mock DNA Style"
-            
-        class MockModel:
-            def generate_content(self, inputs):
-                return MockResponse()
-                
-        self.bravo.vision_model = MockModel()
-        
-        # Mock analyze_assets to populate style library without API calls
-        self.bravo.style_library['dna_page_01'] = "test_dna"
+            self.assertEqual(config.GEN_MODEL_ID, "gemini-2.5-flash-image")
+
+    def test_negative_dna_separate_field(self):
+        """Since a2bfced, negative DNA travels as a separate field — never as a
+        literal '--negative_prompt' string an image model would just draw."""
+        print("\nTesting Negative DNA as separate field...")
+
+        from unittest.mock import MagicMock
+        self.bravo._call_with_backoff = MagicMock(
+            return_value=MagicMock(text="Mocked Prompt")
+        )
+        self.bravo._rate_limit = MagicMock()
+
+        # Populate style library without API calls
+        self.bravo.style_library['dna_page1'] = "test_dna"
         self.bravo.style_library['dna_cover'] = "test_dna"
-        
+
         prompts = self.bravo.generate_prompts("Firefighter")
-        mission_prompt = prompts['prompts'][0]['prompt']
-        
-        self.assertIn("--negative_prompt", mission_prompt)
-        self.assertIn(self.bravo.NEGATIVE_GLOBAL, mission_prompt)
-        print("Negative DNA found in prompt.")
+        mission = prompts['prompts'][0]
+
+        self.assertNotIn("--negative_prompt", mission['prompt'])
+        self.assertIn("negative_dna", mission)
+        self.assertIn(self.bravo.NEGATIVE_GLOBAL, mission['negative_dna'])
+        print("Negative DNA correctly carried as separate field.")
 
     def test_color_masking(self):
         print("\nTesting Color Masking...")

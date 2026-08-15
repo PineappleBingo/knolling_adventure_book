@@ -90,10 +90,14 @@ class AgentFoxtrot:
                     return InputMediaPhoto(open(path, 'rb'), caption=caption)
                 return None
 
-            if 'cover' in result['previews']:
-                p = get_photo(result['previews']['cover'], "Cover Page")
-                if p: media_group.append(p)
-            
+            # Cover is now generated as separate front/back panels
+            for key, caption in (('cover_front', "Cover (Front)"),
+                                 ('cover_back', "Cover (Back)"),
+                                 ('cover', "Cover Page")):
+                if key in result['previews']:
+                    p = get_photo(result['previews'][key], caption)
+                    if p: media_group.append(p)
+
             if 'knolling' in result['previews']:
                 p = get_photo(result['previews']['knolling'], "Knolling Page")
                 if p: media_group.append(p)
@@ -105,8 +109,16 @@ class AgentFoxtrot:
             if media_group:
                 await update.message.reply_media_group(media_group)
             
-            # Send PDF Link
-            await update.message.reply_text(f"📕 <b>Download PDF:</b> {result['drive_link']}", parse_mode='HTML')
+            # Deliver the PDF itself (a file:// link is useless to a Telegram user)
+            pdf_path = result.get('pdf_path')
+            if pdf_path and os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as pdf_file:
+                    await update.message.reply_document(
+                        pdf_file, filename=os.path.basename(pdf_path),
+                        caption="📕 Your book is ready!"
+                    )
+            else:
+                await update.message.reply_text(f"📕 <b>PDF:</b> {result['drive_link']}", parse_mode='HTML')
             
         except Exception as e:
             logger.error(f"Failed to start job: {e}")

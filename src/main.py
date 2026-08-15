@@ -10,8 +10,13 @@ import os
 # Add project root to sys.path to allow 'from src...' imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Runtime directories must exist before logging/generation starts
+os.makedirs("logs", exist_ok=True)
+os.makedirs("temp", exist_ok=True)
+
 from src.modules.orchestrator import AgentOmega
 from src.modules.bot_interface import AgentFoxtrot
+from src.modules.system_architect import AgentAlpha
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +35,10 @@ def main():
     Main function to start the application.
     """
     logger.info("Starting Knolling Adventures Factory...")
-    
+
+    # Environment preflight report (non-fatal at startup; generation gates hard)
+    AgentAlpha().check_environment()
+
     # Initialize Agents
     omega = AgentOmega()
     foxtrot = AgentFoxtrot(omega)
