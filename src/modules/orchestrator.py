@@ -8,6 +8,7 @@ import uuid
 import time
 from src import config
 from src.modules.tracking import AgentGolf
+from src.modules.system_architect import AgentAlpha
 from src.modules.prompt_generator import AgentBravo
 from src.modules.image_generator import AgentCharlie
 from src.modules.qa_agent import AgentDelta
@@ -19,21 +20,30 @@ class AgentOmega:
     def __init__(self):
         logger.info("Agent Omega initialized.")
         logger.info(config.get_status_message())
-        
+
         # Initialize Sub-Agents
+        self.alpha = AgentAlpha()
         self.golf = AgentGolf()
         self.bravo = AgentBravo()
         self.charlie = AgentCharlie()
         self.delta = AgentDelta()
         self.echo = AgentEcho()
-        
+
     async def start_job(self, theme, progress_callback=None):
         """
         Starts the book generation process for a given theme.
         """
         run_id = str(uuid.uuid4())[:8]
         logger.info(f"Starting job {run_id} for theme: {theme}")
-        
+
+        # 0. Preflight — abort loudly before spending any API budget
+        try:
+            self.alpha.assert_ready_for_generation()
+        except EnvironmentError as env_err:
+            if progress_callback:
+                await progress_callback(f"🛑 Preflight failed:\n{env_err}")
+            raise
+
         # 1. Initialize Tracking
         self.golf.start_job(run_id, theme)
         

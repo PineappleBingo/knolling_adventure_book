@@ -11,6 +11,19 @@ load_dotenv()
 # Deployment Tier: 'FREE' or 'PAID'
 DEPLOYMENT_TIER = os.getenv("DEPLOYMENT_TIER", "FREE").upper()
 
+# Quality Mode: 'DRAFT' (cheap iteration) or 'FINAL' (shipping quality)
+# DRAFT  -> gemini-2.5-flash-image  (~1K output, up to 5 reference images)
+# FINAL  -> gemini-3-pro-image      (up to 4K output, up to 14 reference images)
+QUALITY_MODE = os.getenv("QUALITY_MODE", "DRAFT").upper()
+
+# When false (default), missing reference assets abort the run instead of
+# silently degrading to text-only generation (the historic "style drift" cause).
+ALLOW_DEGRADED_ASSETS = os.getenv("ALLOW_DEGRADED_ASSETS", "false").lower() == "true"
+
+# Asset key roster: every page key needs 3 reference PNGs in assets/
+ASSET_KEYS = ["cover", "page1", "page2", "page3", "page4", "page5", "page50"]
+ASSET_ROLES = ["01", "layout_wireframe_kdp", "structure_example"]
+
 # 0.0 SYSTEM CONFIGURATION (Physical Specs)
 TRIM_WIDTH = 8.5
 TRIM_HEIGHT = 8.5

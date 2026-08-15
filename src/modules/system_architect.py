@@ -33,9 +33,57 @@ class AgentAlpha:
         results["assets_dir"] = os.path.isdir("assets")
         results["bible"] = os.path.exists("Series Master Bible v5.22.md")
 
+        # Full reference-asset manifest: 3 PNGs per page key (see assets/MANIFEST.md)
+        missing_refs = []
+        for key in config.ASSET_KEYS:
+            for role in config.ASSET_ROLES:
+                path = f"assets/ref_{key}_{role}.png"
+                if not os.path.exists(path):
+                    missing_refs.append(path)
+        results["reference_assets"] = {
+            "all_present": len(missing_refs) == 0,
+            "missing": missing_refs,
+        }
+
         for key, val in results.items():
-            if key == "fonts":
-                logger.info(f"  {key}: {'OK' if val['all_present'] else 'MISSING ' + str(val['missing'])}")
+            if isinstance(val, dict):
+                if val["all_present"]:
+                    logger.info(f"  {key}: OK")
+                else:
+                    logger.error(f"  {key}: MISSING {len(val['missing'])} file(s): {val['missing']}")
             elif isinstance(val, bool):
                 logger.info(f"  {key}: {'OK' if val else 'MISSING'}")
+        return results
+
+    def assert_ready_for_generation(self):
+        """
+        Hard gate before any generation run. Raises EnvironmentError listing every
+        missing prerequisite unless ALLOW_DEGRADED_ASSETS permits reference gaps.
+        """
+        results = self.check_environment()
+        problems = []
+
+        if not results["google_api_key"]:
+            problems.append("GOOGLE_API_KEY is not set")
+        if not results["bible"]:
+            problems.append("Series Master Bible v5.22.md not found")
+        if not results["fonts"]["all_present"]:
+            problems.append(f"Missing fonts: {results['fonts']['missing']}")
+
+        ref = results["reference_assets"]
+        if not ref["all_present"]:
+            msg = (f"Missing {len(ref['missing'])} reference asset(s) "
+                   f"(see assets/MANIFEST.md): {ref['missing'][:5]}"
+                   f"{' ...' if len(ref['missing']) > 5 else ''}")
+            if config.ALLOW_DEGRADED_ASSETS:
+                logger.warning(f"DEGRADED RUN PERMITTED (ALLOW_DEGRADED_ASSETS=true): {msg}")
+            else:
+                problems.append(msg + " — set ALLOW_DEGRADED_ASSETS=true to run anyway (debug only)")
+
+        if problems:
+            summary = "Environment not ready for generation:\n  - " + "\n  - ".join(problems)
+            logger.error(summary)
+            raise EnvironmentError(summary)
+
+        logger.info("Environment preflight passed.")
         return results
